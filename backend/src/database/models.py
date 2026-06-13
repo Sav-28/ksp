@@ -12,7 +12,7 @@ class District(Base):
 
     # Relationship: one district has many police stations and crimes
     police_stations = relationship("PoliceStation", back_populates="district")
-    crimes = relationship("Crime", back_populates="district")
+    # crimes = relationship("Crime", back_populates="district")  # Temporarily disabled due to denormalized fields
 
     def __repr__(self):
         return f"<District(id={self.id}, name='{self.name}')>"
@@ -25,7 +25,7 @@ class CrimeType(Base):
     description = Column(String(500))
 
     # Relationship: one crime type has many crimes
-    crimes = relationship("Crime", back_populates="crime_type")
+    # crimes = relationship("Crime", back_populates="crime_type")  # Temporarily disabled due to denormalized fields
 
     def __repr__(self):
         return f"<CrimeType(id={self.id}, ipc_section='{self.ipc_section}', description='{self.description}')>"
@@ -40,7 +40,7 @@ class PoliceStation(Base):
 
     # Relationships
     district = relationship("District", back_populates="police_stations")
-    crimes = relationship("Crime", back_populates="police_station")
+    # crimes = relationship("Crime", back_populates="police_station")  # Temporarily disabled due to denormalized fields
 
     def __repr__(self):
         return f"<PoliceStation(id={self.id}, name='{self.name}', district_id={self.district_id})>"

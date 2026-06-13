@@ -72,11 +72,13 @@ class QueryTranslator:
                 raise ValueError("Location must be a non-empty string")
 
             # Case-insensitive matching across district, taluk, or police_station
-            loc_pattern = f"%{location.strip()}%"
+            # Using LOWER for SQLite compatibility
+            loc_param = location.strip()
+            # Add wildcards for partial match
+            params["loc"] = f"%{loc_param}%"
             conditions.append(
-                "(district ILIKE :loc OR taluk ILIKE :loc OR police_station ILIKE :loc)"
+                "(LOWER(district) LIKE LOWER(:loc) OR LOWER(taluk) LIKE LOWER(:loc) OR LOWER(police_station) LIKE LOWER(:loc))"
             )
-            params["loc"] = loc_pattern
 
         # Process date_range entity
         date_range = entities.get("date_range")
@@ -120,14 +122,14 @@ class QueryTranslator:
             # Map to IPC section if possible
             ipc_section = self.crime_type_mapping.get(crime_type_clean)
             if ipc_section:
-                conditions.append("crime_type ILIKE :ctype")
-                params["ctype"] = f"%{ipc_section}%"
+                conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
+                params["ctype"] = ipc_section
             else:
                 # If not in mapping, try direct match (for future flexibility)
                 # But log warning that it might not be effective
                 print(f"Warning: Crime type '{crime_type}' not found in mapping. Using direct match.")
-                conditions.append("crime_type ILIKE :ctype")
-                params["ctype"] = f"%{crime_type}%"
+                conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
+                params["ctype"] = crime_type
 
         # Validate required inputs for SHOW/COUNT
         if intent in ["SHOW_CRIMES", "COUNT_CRIMES"]:

@@ -1,0 +1,1 @@
+"""Database package for KSP Crime AI."""

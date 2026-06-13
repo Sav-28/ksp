@@ -165,7 +165,7 @@ const ChatPage: React.FC = () => {
 
     try {
       // Call POST /chat endpoint
-      const response = await fetch('http://localhost:8000/chat', {
+      const response = await fetch('http://localhost:8001/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
