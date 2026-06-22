@@ -70,7 +70,26 @@ async def chat_endpoint(
                 results = []  # No detailed results for count
             else:
                 # For select queries, fetch all results
-                results = [row._asdict() for row in result_proxy.fetchall()]
+                results = []
+                for row in result_proxy.fetchall():
+                    try:
+                        # Try to use _asdict() method (SQLAlchemy 2.0+)
+                        if hasattr(row, '_asdict'):
+                            results.append(row._asdict())
+                        else:
+                            # Fallback for other row types
+                            results.append(dict(row))
+                    except Exception as row_conversion_err:
+                        logging.warning(f"Could not convert row to dict: {row_conversion_err}")
+                        # Manual fallback: try to get column names and values
+                        if hasattr(row, 'keys') and hasattr(row, 'values'):
+                            results.append(dict(zip(row.keys(), row.values())))
+                        else:
+                            # Last resort: treat as positional tuple
+                            # This is less ideal but prevents crashes
+                            logging.error(f"Unable to convert row to dict: {type(row)}")
+                            # Skip this row rather than crashing the whole request
+                            continue
                 row_count = len(results)
 
         except Exception as e:

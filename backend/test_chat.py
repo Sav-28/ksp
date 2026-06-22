@@ -8,7 +8,7 @@ def test_chat_endpoint():
     print(f"Input text: {input_text}")
 
     # Call NLP service
-    nlp_output = nlp_service.get_intent_and_entities(input_text)
+    nlp_output = nlp_service.get_intent_and_entities(input_text, language="en")
     print(f"NLP output: {nlp_output}")
 
     # Call query engine

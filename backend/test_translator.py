@@ -2,7 +2,7 @@ from src.query_engine.translator import QueryTranslator
 from src.nlp.intent_classifier import nlp_service
 
 text = "show crimes in bengaluru"
-nlp_output = nlp_service.get_intent_and_entities(text)
+nlp_output = nlp_service.get_intent_and_entities(text, language="en")
 print(f"NLP Output: {nlp_output}")
 
 translator = QueryTranslator()

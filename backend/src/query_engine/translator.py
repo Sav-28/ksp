@@ -117,28 +117,16 @@ class QueryTranslator:
             if not isinstance(crime_type, str):
                 raise ValueError("Crime type must be a string")
 
-            crime_type_clean = crime_type.strip().lower()
-
-            # Map to IPC section if possible
-            ipc_section = self.crime_type_mapping.get(crime_type_clean)
-            if ipc_section:
-                conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
-                params["ctype"] = ipc_section
-            else:
-                # If not in mapping, try direct match (for future flexibility)
-                # But log warning that it might not be effective
-                print(f"Warning: Crime type '{crime_type}' not found in mapping. Using direct match.")
-                conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
-                params["ctype"] = crime_type
+            # Use the crime type directly (already formatted by NLP service)
+            # Match against denormalized crime_type field which stores descriptions like "Theft", "Murder", etc.
+            conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
+            params["ctype"] = crime_type.strip()
 
         # Validate required inputs for SHOW/COUNT
         if intent in ["SHOW_CRIMES", "COUNT_CRIMES"]:
-            # For these intents, we require either location or date_range (or both)
-            # This prevents overly broad queries
-            if not location and not date_range:
-                raise ValueError(
-                    "Either location or date_range must be provided for SHOW_CRIMES or COUNT_CRIMES intents"
-                )
+            # Allow queries without filters if no specific criteria provided
+            # This enables "show all crimes" type queries
+            pass
 
         # Combine conditions
         if conditions:
@@ -148,7 +136,7 @@ class QueryTranslator:
 
         # Add limit for SHOW_CRIMES
         if intent == "SHOW_CRIMES":
-            params["limit"] = 100  # Hard limit as per requirements
+            params["limit"] = 1000  # Increased limit to show more records
             sql = base_sql + where_clause + limit_clause
         else:
             sql = base_sql + where_clause

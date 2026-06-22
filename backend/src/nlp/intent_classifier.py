@@ -103,7 +103,7 @@ class IntentClassifier:
         if not self.is_trained:
             return "UNKNOWN", 0.0
 
-        # Preprocess text
+        # Preprocess text (language-aware preprocessing could be added here)
         text_clean = self._preprocess_text(text)
 
         # Vectorize and predict
@@ -115,13 +115,14 @@ class IntentClassifier:
 
         return intent, float(confidence)
 
-    def get_intent_and_entities(self, text: str) -> Dict[str, Any]:
+    def get_intent_and_entities(self, text: str, language: str = "en") -> Dict[str, Any]:
         """
         Get intent and entities for a given text.
         Includes basic entity extraction for location, date range, and crime type.
 
         Args:
             text: Input text
+            language: Language code ('en' for English, 'kn' for Kannada)
 
         Returns:
             Dictionary with intent, confidence, and entities
@@ -173,13 +174,20 @@ class IntentClassifier:
 
     def _extract_location(self, text: str) -> str:
         """Extract location name from text."""
-        # Look for patterns like "in [place]" or "at [place]"
-        match = re.search(r'in\s+([a-zA-Z\s]+?)(?:\s|$)', text)
+        # Look for patterns like "in [place]", "at [place]", or "near [place]"
+        # Capture location name but stop before date/time indicators or conjunctions
+        boundary_pattern = r'\s+(?:and|or|but|last|next|yesterday|today|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4}|$)'
+        match = re.search(r'in\s+([a-zA-Z\s]+?)(?=' + boundary_pattern + r')', text)
         if match:
             location = match.group(1).strip()
             if location and len(location) > 2:
                 return location.title()
-        match = re.search(r'at\s+([a-zA-Z\s]+?)(?:\s|$)', text)
+        match = re.search(r'at\s+([a-zA-Z\s]+?)(?=' + boundary_pattern + r')', text)
+        if match:
+            location = match.group(1).strip()
+            if location and len(location) > 2:
+                return location.title()
+        match = re.search(r'near\s+([a-zA-Z\s]+?)(?=' + boundary_pattern + r')', text)
         if match:
             location = match.group(1).strip()
             if location and len(location) > 2:
@@ -189,6 +197,25 @@ class IntentClassifier:
             if city in text:
                 return city.title().replace('Udupi', 'Udupi').replace('Shivamogga', 'Shivamogga')
         return None
+
+    def _strip_date_indicators(self, text: str) -> str:
+        """Strip date/time indicators from the end of location text."""
+        # Common date/time phrases that might appear after location
+        date_patterns = [
+            r'\s+last\s+(?:week|month|year)$',
+            r'\s+next\s+(?:week|month|year)$',
+            r'\s+yesterday$',
+            r'\s+today$',
+            r'\s+\d{1,2}/\d{1,2}/\d{2,4}$',
+            r'\s+\d{4}$',
+            r'\s+(?:january|february|march|april|may|june|july|august|september|october|november|december)$',
+            r'\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)$'
+        ]
+
+        for pattern in date_patterns:
+            text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+        return text.strip()
 
     def _extract_date_range(self, text: str) -> Dict[str, str]:
         """Extract date range from text."""
@@ -244,11 +271,11 @@ class IntentClassifier:
 
         for month_name, month_num in months.items():
             if f"in {month_name}" in text:
-                # Assume current year if not specified
+                # Assume current year first
                 year = now.year
-                # Handle last year if the month has passed and we're early in the year
-                if month_num < now.month - 2:  # Arbitrary threshold
-                    year = now.year
+                # If the month hasn't occurred yet this year, it must be referring to last year
+                if month_num > now.month:
+                    year = now.year - 1
                 return {
                     "start": f"{year}-{month_num:02d}-01",
                     "end": f"{year}-{month_num:02d}-31"
