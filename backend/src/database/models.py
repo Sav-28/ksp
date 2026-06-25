@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Text, Date, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Date, Float, ForeignKey, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
 
 Base = declarative_base()
 
@@ -67,3 +68,24 @@ class Crime(Base):
 
     def __repr__(self):
         return f"<Crime(id={self.id}, fir_number='{self.fir_number}', date_occurred='{self.date_occurred}', crime_type='{self.crime_type}')>"
+
+
+class AuditLog(Base):
+    """
+    Persisted audit trail of every query made against the system.
+    Important for a government/police system for accountability and review.
+    """
+    __tablename__ = 'audit_logs'
+
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    username = Column(String(100))          # who made the query (from auth token)
+    query_text = Column(Text, nullable=False)  # the raw user query
+    language = Column(String(10))           # 'en' or 'kn'
+    intent = Column(String(50))             # classified intent
+    confidence = Column(Float)              # classifier confidence
+    sql_generated = Column(Text)            # the SQL that was executed
+    row_count = Column(Integer)             # number of rows returned
+
+    def __repr__(self):
+        return f"<AuditLog(id={self.id}, user='{self.username}', intent='{self.intent}', rows={self.row_count})>"

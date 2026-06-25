@@ -4,25 +4,48 @@ from sqlalchemy import text
 from typing import Dict, Any
 import logging
 import traceback
+import os
 
 # Import real services
 from src.nlp.intent_classifier import nlp_service
 from src.query_engine.translator import QueryTranslator
 from src.database.session import get_db
+from src.database.models import AuditLog
+from src.api.auth import get_current_user
 
 router = APIRouter()
 
 # Initialize query translator
 query_engine = QueryTranslator()
 
-# Mock audit function (to be replaced with real implementation)
-def log_audit(user_id: str, text: str, intent: str, sql: str, row_count: int):
-    logging.info(f"AUDIT: user={user_id}, query='{text}', intent={intent}, rows={row_count}")
+# Whether to expose generated SQL in responses (debugging only)
+EXPOSE_SQL = os.getenv("KSP_EXPOSE_SQL", "false").lower() == "true"
+
+
+def write_audit(db: Session, username: str, query_text: str, language: str,
+                intent: str, confidence: float, sql: str, row_count: int) -> None:
+    """Persist an audit log entry. Never raises — auditing must not break queries."""
+    try:
+        entry = AuditLog(
+            username=username,
+            query_text=query_text,
+            language=language,
+            intent=intent,
+            confidence=confidence,
+            sql_generated=sql,
+            row_count=row_count,
+        )
+        db.add(entry)
+        db.commit()
+    except Exception as e:
+        logging.warning(f"Failed to write audit log: {e}")
+        db.rollback()
 
 @router.post("/chat")
 async def chat_endpoint(
     request: Dict[str, Any],
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    username: str = Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
     POST /chat endpoint for crime database conversational API.
@@ -53,7 +76,28 @@ async def chat_endpoint(
             raise ValueError("Text input is required and must be a string")
 
         # Call NLP service to get intent/entities
-        nlp_output = nlp_service.get_intent_and_entities(input_text)
+        nlp_output = nlp_service.get_intent_and_entities(input_text, language=language)
+        intent = nlp_output.get("intent")
+
+        # Handle out-of-scope queries gracefully (don't send to translator)
+        if intent not in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:
+            write_audit(db, username, input_text, language, "UNKNOWN",
+                        nlp_output.get("confidence", 0.0), None, 0)
+            return {
+                "answer": (
+                    "Sorry, I couldn't understand that. I can help you query crime records. Try:\n"
+                    "• 'Show crimes in Bengaluru'\n"
+                    "• 'How many thefts in Mysuru'\n"
+                    "• 'Crimes by district'\n"
+                    "• 'Breakdown of crimes by type'"
+                ),
+                "intent": "UNKNOWN",
+                "confidence": round(nlp_output.get("confidence", 0.0), 3),
+                "entities": {},
+                "sql": None,
+                "results": [],
+                "error": None
+            }
 
         # Call query engine to get SQL/params
         sql, params = query_engine.translate(nlp_output)
@@ -62,14 +106,38 @@ async def chat_endpoint(
         try:
             result_proxy = db.execute(text(sql), params)
 
-            # Handle different query types
-            if "COUNT(*)" in sql.upper():
-                # For count queries, fetch the count value
+            if intent == "COUNT_CRIMES":
+                # For count queries, fetch the single count value
                 count_result = result_proxy.fetchone()
                 row_count = count_result[0] if count_result else 0
-                results = []  # No detailed results for count
+                # Also fetch the matching case records so the user can see details,
+                # not just a number. Reuse the translator with a SHOW-style intent.
+                results = []
+                try:
+                    detail_output = {
+                        "intent": "SHOW_CRIMES",
+                        "entities": nlp_output.get("entities", {})
+                    }
+                    detail_sql, detail_params = query_engine.translate(detail_output)
+                    detail_proxy = db.execute(text(detail_sql), detail_params)
+                    for row in detail_proxy.fetchall():
+                        mapping = row._mapping if hasattr(row, "_mapping") else row
+                        results.append(dict(mapping))
+                except Exception as detail_err:
+                    logging.warning(f"Could not fetch detail rows for count query: {detail_err}")
+                    results = []
+            elif intent == "BREAKDOWN_CRIMES":
+                # For breakdown queries, fetch label/count aggregation rows
+                results = []
+                for row in result_proxy.fetchall():
+                    mapping = row._mapping if hasattr(row, "_mapping") else row
+                    results.append({
+                        "label": mapping["label"],
+                        "count": mapping["count"]
+                    })
+                row_count = sum(r["count"] for r in results)
             else:
-                # For select queries, fetch all results
+                # SHOW_CRIMES: fetch all detail rows
                 results = []
                 for row in result_proxy.fetchall():
                     try:
@@ -85,10 +153,7 @@ async def chat_endpoint(
                         if hasattr(row, 'keys') and hasattr(row, 'values'):
                             results.append(dict(zip(row.keys(), row.values())))
                         else:
-                            # Last resort: treat as positional tuple
-                            # This is less ideal but prevents crashes
                             logging.error(f"Unable to convert row to dict: {type(row)}")
-                            # Skip this row rather than crashing the whole request
                             continue
                 row_count = len(results)
 
@@ -98,33 +163,55 @@ async def chat_endpoint(
             raise ValueError(f"Database execution error: {str(e)}")
 
         # Format results into natural language answer
-        intent = nlp_output.get("intent")
         confidence = nlp_output.get("confidence", 0.0)
+        entities = nlp_output.get("entities", {})
+
+        # Build a human-readable summary of the filters that were applied
+        filter_parts = []
+        if entities.get("crime_type"):
+            filter_parts.append(entities["crime_type"])
+        if entities.get("location"):
+            filter_parts.append(f"in {entities['location']}")
+        if entities.get("date_range"):
+            dr = entities["date_range"]
+            filter_parts.append(f"between {dr.get('start')} and {dr.get('end')}")
+        filter_summary = " ".join(filter_parts).strip()
 
         if intent == "COUNT_CRIMES":
-            answer = f"Found {row_count} crimes matching your criteria."
+            if filter_summary:
+                answer = f"Found {row_count} crime(s) matching: {filter_summary}."
+            else:
+                answer = f"Found {row_count} crime(s) in total."
+        elif intent == "BREAKDOWN_CRIMES":
+            group_dim = entities.get("group_by", "district")
+            dim_label = {"district": "district", "crime_type": "crime type", "month": "month"}.get(group_dim, group_dim)
+            answer = f"Here is the crime breakdown by {dim_label} ({len(results)} group(s)):"
         elif intent == "SHOW_CRIMES":
             if row_count == 0:
-                answer = "No crimes found matching your criteria."
+                answer = "No crimes found matching your criteria. Try a different location, crime type, or date range."
+            elif filter_summary:
+                answer = f"Found {row_count} crime(s) matching: {filter_summary}."
             else:
-                answer = f"Here are the first {min(row_count, 100)} crimes:"
-                # In a real implementation, you might format this as a table summary
+                answer = f"Found {row_count} crime(s)."
         else:
-            answer = "Sorry, I couldn't process that. Try: 'Show crimes in [place] last month'"
+            answer = (
+                "Sorry, I couldn't understand that. Try one of these:\n"
+                "• 'Show crimes in Bengaluru'\n"
+                "• 'How many thefts in Mysuru'\n"
+                "• 'Crimes by district'"
+            )
 
-        # Add sessionId to answer if provided (for history tracking)
-        if session_id:
-            answer = f"[Session: {session_id}] {answer}"
-
-        # Log request via audit middleware
-        # In real implementation: log_audit(user_id, text, intent, sql, row_count)
-        # For demo, we'll just log to console
-        logging.info(f"AUDIT: query='{input_text}', intent={intent}, rows={row_count}")
+        # Log request to persisted audit trail
+        write_audit(db, username, input_text, language, intent,
+                    confidence, sql, row_count)
 
         # Return response
         return {
             "answer": answer,
-            "sql": sql,  # Include for debugging - remove in production
+            "intent": intent,
+            "confidence": round(confidence, 3),
+            "entities": entities,
+            "sql": sql if EXPOSE_SQL else None,  # Only expose SQL when debugging
             "results": results,
             "error": None
         }

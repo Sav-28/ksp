@@ -34,7 +34,27 @@ def create_training_data():
         "list traffic accident cases",
         "show cyber crime reports",
         "display economic offense cases",
-        "show narcotics cases"
+        "show narcotics cases",
+        "show all crimes",
+        "list all records",
+        "show me theft in hubli",
+        "display all murders in mysuru",
+        "give me the crimes in tumakuru",
+        "show recent crimes",
+        "what crimes happened in raichur",
+        "show crime records for dharwad",
+        "pull up theft cases in bengaluru",
+        "find robbery cases in belagavi",
+        "show me crimes from january",
+        "list crimes in 2025",
+        "display forgery cases",
+        "show cheating cases in mangaluru",
+        "show rioting incidents in kalaburagi",
+        "i want to see all theft cases",
+        "show crimes that happened yesterday",
+        "list all the snatching cases in bengaluru",
+        "display crime details for mysuru",
+        "show me everything in raichur"
     ]
 
     # Training samples for COUNT_CRIMES intent
@@ -58,7 +78,63 @@ def create_training_data():
         "number of traffic accident cases",
         "how many cyber crime reports",
         "count of economic offense cases",
-        "number of narcotics cases"
+        "number of narcotics cases",
+        "how many thefts in hubli",
+        "count total crimes",
+        "how many crimes are there",
+        "what is the total number of crimes",
+        "count murders in mysuru",
+        "how many forgery cases in dharwad",
+        "tell me the number of crimes in tumakuru",
+        "count all theft cases",
+        "how many crimes happened in 2025",
+        "number of crimes last week",
+        "how many burglaries in belagavi",
+        "count cheating cases in mangaluru",
+        "how many rioting cases in kalaburagi",
+        "give me the count of robberies",
+        "total thefts in bengaluru",
+        "how many thefts in mysuru",
+        "how many thefts in bengaluru",
+        "how many murders in hubli",
+        "how many robberies in belagavi",
+        "how many cheating cases in mangaluru",
+        "how many theft in dharwad",
+        "how many assault in raichur"
+    ]
+
+    # Training samples for BREAKDOWN_CRIMES intent (aggregation / group by)
+    breakdown_crimes_samples = [
+        "crimes by district",
+        "show crimes by district",
+        "breakdown of crimes by district",
+        "crimes per district",
+        "district wise crime count",
+        "how many crimes in each district",
+        "crimes by type",
+        "breakdown by crime type",
+        "show crimes by category",
+        "what are the top crime types",
+        "most common crimes",
+        "crime types distribution",
+        "crimes grouped by type",
+        "crimes per crime type",
+        "show me crime breakdown",
+        "which district has the most crimes",
+        "crimes by month",
+        "monthly crime breakdown",
+        "crime trend over time",
+        "crimes month wise",
+        "distribution of crimes across districts",
+        "compare crimes by district",
+        "show crime statistics by type",
+        "summarize crimes by district",
+        "group crimes by type",
+        "crime count per district",
+        "breakdown of theft by district",
+        "show top crimes by category",
+        "give me crime distribution by location",
+        "analyze crimes by district"
     ]
 
     # Training samples for UNKNOWN intent (out of scope)
@@ -82,13 +158,25 @@ def create_training_data():
         "sing a song",
         "dance video",
         "movie recommendations",
-        "restaurant near me"
+        "restaurant near me",
+        "what is your name",
+        "can you help me",
+        "play music",
+        "weather forecast",
+        "book a cab",
+        "order food",
+        "what is the capital of india",
+        "tell me about cricket",
+        "how old are you",
+        "thank you very much"
     ]
 
     # Combine all samples and labels
-    texts = show_crimes_samples + count_crimes_samples + unknown_samples
+    texts = (show_crimes_samples + count_crimes_samples +
+             breakdown_crimes_samples + unknown_samples)
     labels = (["SHOW_CRIMES"] * len(show_crimes_samples) +
               ["COUNT_CRIMES"] * len(count_crimes_samples) +
+              ["BREAKDOWN_CRIMES"] * len(breakdown_crimes_samples) +
               ["UNKNOWN"] * len(unknown_samples))
 
     return texts, labels
@@ -115,6 +203,8 @@ def train_and_save_model(model_path="models/intent_en.joblib"):
         test_samples = [
             "show crimes in bengaluru",
             "how many thefts in mysuru",
+            "crimes by district",
+            "breakdown of crimes by type",
             "hello how are you"
         ]
         print("\nTesting model:")

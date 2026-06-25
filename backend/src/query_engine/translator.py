@@ -49,15 +49,27 @@ class QueryTranslator:
         entities = nlp_output.get("entities", {})
 
         # Validate intent
-        if intent not in ["SHOW_CRIMES", "COUNT_CRIMES"]:
+        if intent not in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:
             raise ValueError(f"Unsupported intent: {intent}")
+
+        # Map group_by dimension to a SQL column / expression
+        group_by_map = {
+            "district": "district",
+            "crime_type": "crime_type",
+            "month": "strftime('%Y-%m', date_occurred)"
+        }
 
         # Build base query
         if intent == "SHOW_CRIMES":
             base_sql = "SELECT * FROM crimes"
             limit_clause = " LIMIT :limit"
-        else:  # COUNT_CRIMES
+        elif intent == "COUNT_CRIMES":
             base_sql = "SELECT COUNT(*) FROM crimes"
+            limit_clause = ""
+        else:  # BREAKDOWN_CRIMES
+            group_dim = entities.get("group_by", "district")
+            group_expr = group_by_map.get(group_dim, "district")
+            base_sql = f"SELECT {group_expr} AS label, COUNT(*) AS count FROM crimes"
             limit_clause = ""
 
         # Build WHERE conditions
@@ -122,10 +134,10 @@ class QueryTranslator:
             conditions.append("LOWER(crime_type) LIKE LOWER(:ctype)")
             params["ctype"] = crime_type.strip()
 
-        # Validate required inputs for SHOW/COUNT
-        if intent in ["SHOW_CRIMES", "COUNT_CRIMES"]:
+        # Validate required inputs for SHOW/COUNT/BREAKDOWN
+        if intent in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:
             # Allow queries without filters if no specific criteria provided
-            # This enables "show all crimes" type queries
+            # This enables "show all crimes" / "crimes by district" type queries
             pass
 
         # Combine conditions
@@ -134,11 +146,18 @@ class QueryTranslator:
         else:
             where_clause = ""
 
-        # Add limit for SHOW_CRIMES
+        # Assemble final SQL per intent
         if intent == "SHOW_CRIMES":
             params["limit"] = 1000  # Increased limit to show more records
             sql = base_sql + where_clause + limit_clause
-        else:
+        elif intent == "BREAKDOWN_CRIMES":
+            # GROUP BY the chosen dimension, ordered by count descending
+            group_dim = entities.get("group_by", "district")
+            group_expr = group_by_map.get(group_dim, "district")
+            # Month is ordered chronologically; everything else by count desc
+            order_clause = " ORDER BY label ASC" if group_dim == "month" else " ORDER BY count DESC"
+            sql = base_sql + where_clause + f" GROUP BY {group_expr}" + order_clause
+        else:  # COUNT_CRIMES
             sql = base_sql + where_clause
 
         return sql, params

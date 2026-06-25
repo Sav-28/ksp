@@ -5,6 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from typing import Dict, Any, Tuple
 import os
+import calendar
 from datetime import datetime, timedelta
 
 class IntentClassifier:
@@ -18,13 +19,14 @@ class IntentClassifier:
         self.model_path = model_path
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
-            stop_words='english',
+            stop_words=None,  # Keep words like "how", "count", "by" — they carry intent signal
             ngram_range=(1, 2),
             max_features=5000
         )
         self.classifier = LogisticRegression(
             random_state=42,
-            max_iter=1000
+            max_iter=1000,
+            C=10.0  # Less regularization for small dataset to sharpen decision boundaries
         )
         self.is_trained = False
 
@@ -119,6 +121,7 @@ class IntentClassifier:
         """
         Get intent and entities for a given text.
         Includes basic entity extraction for location, date range, and crime type.
+        Supports Kannada queries by normalizing them to English first.
 
         Args:
             text: Input text
@@ -127,19 +130,44 @@ class IntentClassifier:
         Returns:
             Dictionary with intent, confidence, and entities
         """
+        from src.nlp.kannada_support import contains_kannada, analyze_kannada
+
+        # If the query is in Kannada, normalize it to an English query string
+        # and use the deterministically-detected intent (more reliable than
+        # round-tripping through the English-trained ML classifier).
+        original_text = text
+        was_kannada = language == "kn" or contains_kannada(text)
+        kn_intent = None
+        normalized_query = None
+        if was_kannada:
+            analysis = analyze_kannada(text)
+            text = analysis["normalized"]
+            kn_intent = analysis["intent"]
+            normalized_query = text
+
         intent, confidence = self.predict(text)
 
-        # Apply confidence threshold
-        if confidence < 0.3:
-            intent = "UNKNOWN"
+        # For Kannada, trust the deterministic intent
+        if kn_intent is not None:
+            intent = kn_intent
+            confidence = max(confidence, 0.9)
+        else:
+            # Apply confidence threshold for English
+            if confidence < 0.3:
+                intent = "UNKNOWN"
 
-        # Extract entities
+        # Extract entities (from the normalized English text)
         entities = self._extract_entities(text)
+
+        # For breakdown queries, ensure a grouping dimension exists (default: district)
+        if intent == "BREAKDOWN_CRIMES" and "group_by" not in entities:
+            entities["group_by"] = "district"
 
         return {
             "intent": intent,
             "confidence": confidence,
-            "entities": entities
+            "entities": entities,
+            "normalized_query": normalized_query
         }
 
     def _extract_entities(self, text: str) -> Dict[str, Any]:
@@ -170,7 +198,37 @@ class IntentClassifier:
         if crime_type:
             entities["crime_type"] = crime_type
 
+        # Extract group-by dimension (for BREAKDOWN queries)
+        group_by = self._extract_group_by(text_lower)
+        if group_by:
+            entities["group_by"] = group_by
+
         return entities
+
+    def _extract_group_by(self, text: str) -> str:
+        """
+        Extract the grouping dimension for breakdown/aggregation queries.
+
+        Returns one of: 'district', 'crime_type', 'month', or None.
+        """
+        # "by district" / "per district" / "district wise" / "across districts"
+        if re.search(r'\b(?:by|per|across|each|wise)\b.*\b(?:district|location|place|city|area)\b', text) \
+                or re.search(r'\b(?:district|location|city|area)\b.*\bwise\b', text) \
+                or "by district" in text or "by location" in text or "by city" in text:
+            return "district"
+
+        # "by type" / "by crime type" / "top crimes" / "crime types"
+        if re.search(r'\b(?:by|per|each)\b.*\b(?:type|category|kind)\b', text) \
+                or "crime types" in text or "type of crime" in text \
+                or "top crime" in text or "most common crime" in text:
+            return "crime_type"
+
+        # "by month" / "monthly" / "over time" / "trend"
+        if "by month" in text or "monthly" in text or "over time" in text \
+                or "trend" in text or "month wise" in text:
+            return "month"
+
+        return None
 
     def _extract_location(self, text: str) -> str:
         """Extract location name from text."""
@@ -276,9 +334,11 @@ class IntentClassifier:
                 # If the month hasn't occurred yet this year, it must be referring to last year
                 if month_num > now.month:
                     year = now.year - 1
+                # Calculate the correct last day of the month (calendar-aware)
+                last_day = calendar.monthrange(year, month_num)[1]
                 return {
                     "start": f"{year}-{month_num:02d}-01",
-                    "end": f"{year}-{month_num:02d}-31"
+                    "end": f"{year}-{month_num:02d}-{last_day:02d}"
                 }
 
         return None
