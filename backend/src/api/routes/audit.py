@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 
 from src.database.session import get_db
 from src.database.models import AuditLog
-from src.api.auth import get_current_user
+from src.api.auth import require_role
 
 router = APIRouter()
 
@@ -18,11 +18,11 @@ router = APIRouter()
 async def get_audit_logs(
     limit: int = 50,
     db: Session = Depends(get_db),
-    username: str = Depends(get_current_user),
+    username: str = Depends(require_role("admin")),
 ) -> Dict[str, Any]:
     """
     Return the most recent audit log entries.
-    Requires authentication.
+    Admin-only (role-based access control — Area 10).
     """
     limit = max(1, min(limit, 500))  # clamp
 

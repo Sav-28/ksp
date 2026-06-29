@@ -12,7 +12,8 @@ import hashlib
 import base64
 import json
 import time
-from typing import Optional
+import binascii
+from typing import Optional, List
 
 from fastapi import Header, HTTPException, status
 
@@ -25,11 +26,35 @@ TOKEN_TTL = int(os.getenv("KSP_TOKEN_TTL", str(8 * 3600)))
 # Whether auth is enforced. Set KSP_AUTH_REQUIRED=false to disable (e.g. demos).
 AUTH_REQUIRED = os.getenv("KSP_AUTH_REQUIRED", "true").lower() != "false"
 
-# Demo officer accounts. In production these would live in a DB with hashed
-# passwords. Format: username -> {"password": ..., "name": ..., "role": ...}
+# Password hashing (PBKDF2-HMAC-SHA256, stdlib — no external bcrypt dependency).
+_PW_SALT = os.getenv("KSP_PW_SALT", "kspsalt2024").encode()
+_PW_ITERATIONS = 100_000
+
+
+def hash_password(password: str) -> str:
+    """Return a hex PBKDF2 hash of the password."""
+    return binascii.hexlify(
+        hashlib.pbkdf2_hmac("sha256", password.encode(), _PW_SALT, _PW_ITERATIONS)
+    ).decode()
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Constant-time verification of a password against its stored hash."""
+    return hmac.compare_digest(hash_password(password), password_hash)
+
+
+# Demo officer accounts with HASHED passwords (plaintext is never stored).
+# In production these would live in a database. Roles drive access control.
+#   officer / ksp@2024     admin / admin@2024
 OFFICERS = {
-    "officer": {"password": "ksp@2024", "name": "Duty Officer", "role": "officer"},
-    "admin": {"password": "admin@2024", "name": "Administrator", "role": "admin"},
+    "officer": {
+        "password_hash": "0e64b899fd9584132a49edbf235e168a00cb38ade5ab4f5a94266095e4c9c6a6",
+        "name": "Duty Officer", "role": "officer",
+    },
+    "admin": {
+        "password_hash": "dc2cd9f0726696aeb1e67083c120af7ca0acc813668aa237a6466baec4e50746",
+        "name": "Administrator", "role": "admin",
+    },
 }
 
 
@@ -85,12 +110,17 @@ def verify_token(token: str) -> Optional[str]:
 
 
 def authenticate(username: str, password: str) -> bool:
-    """Check username/password against the officer store."""
+    """Check username/password against the officer store (hashed)."""
     officer = OFFICERS.get(username)
     if not officer:
         return False
-    # Constant-time password comparison
-    return hmac.compare_digest(officer["password"], password)
+    return verify_password(password, officer["password_hash"])
+
+
+def get_user_role(username: str) -> Optional[str]:
+    """Return the role for a username, if known."""
+    officer = OFFICERS.get(username)
+    return officer["role"] if officer else None
 
 
 def get_current_user(authorization: Optional[str] = Header(default=None)) -> str:
@@ -122,3 +152,22 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> str
             headers={"WWW-Authenticate": "Bearer"},
         )
     return username
+
+
+def require_role(*allowed_roles: str):
+    """
+    Dependency factory enforcing role-based access control (Area 10).
+    Usage: username: str = Depends(require_role("admin"))
+    """
+    def _checker(authorization: Optional[str] = Header(default=None)) -> str:
+        username = get_current_user(authorization)
+        if not AUTH_REQUIRED:
+            return username
+        role = get_user_role(username)
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access denied. Requires role: {', '.join(allowed_roles)}.",
+            )
+        return username
+    return _checker

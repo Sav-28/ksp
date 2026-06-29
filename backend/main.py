@@ -13,6 +13,11 @@ from src.api.routes.chat import router as chat_router
 from src.api.routes.stats import router as stats_router
 from src.api.routes.audit import router as audit_router
 from src.api.routes.auth_routes import router as auth_router
+from src.api.routes.details import router as details_router
+from src.api.routes.network import router as network_router
+from src.api.routes.hotspots import router as hotspots_router
+from src.api.routes.insights import router as insights_router
+from src.api.routes.decision_support import router as decision_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -40,6 +45,11 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(details_router, prefix="/api")
+app.include_router(network_router, prefix="/api")
+app.include_router(hotspots_router, prefix="/api")
+app.include_router(insights_router, prefix="/api")
+app.include_router(decision_router, prefix="/api")
 
 
 @app.get("/")

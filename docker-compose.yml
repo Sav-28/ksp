@@ -1,0 +1,22 @@
+# KSP Crime AI — full stack (backend + frontend)
+# Usage: docker compose up --build
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8004:8004"
+    environment:
+      - KSP_AUTH_REQUIRED=true
+      - KSP_SECRET_KEY=${KSP_SECRET_KEY:-change-me-in-production}
+      - KSP_CORS_ORIGINS=http://localhost:3000,http://localhost
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,13 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Dashboard from '../components/Dashboard';
 import Login from '../components/Login';
+import NetworkView from '../components/NetworkView';
+import HotspotView from '../components/HotspotView';
+import InsightsView from '../components/InsightsView';
+import ProfilesView from '../components/ProfilesView';
+import FinanceView from '../components/FinanceView';
+import ForecastView from '../components/ForecastView';
+import AuditView from '../components/AuditView';
 import { apiFetch, isAuthenticated, getUser, clearAuth, AuthUser } from '../api';
 import {
   localizeCrimeType, localizeDistrict, localizeDescription,
   localizePlace, localizeLabel, buildAnswer
 } from '../locale';
 
-type ViewType = 'chat' | 'dashboard';
+type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'audit';
 
 // Shared data types
 interface CrimeRecord {
@@ -28,6 +35,36 @@ interface BreakdownItem {
   count: number;
 }
 
+interface PersonBrief {
+  id: number;
+  name: string;
+  age?: number;
+  gender?: string;
+  district?: string;
+  occupation?: string;
+  risk_score?: number;
+}
+
+interface CrimeDetail {
+  fir_number: string;
+  crime_type: string;
+  date_occurred: string;
+  district: string;
+  police_station: string;
+  description: string;
+  investigation?: {
+    status?: string;
+    officer?: string;
+    ipc_sections?: string;
+    arrest_made?: boolean;
+    outcome?: string;
+    court_status?: string;
+  } | null;
+  accused: PersonBrief[];
+  victims: PersonBrief[];
+  witnesses: PersonBrief[];
+}
+
 interface ChatMessage {
   text: string;
   isUser: boolean;
@@ -37,6 +74,8 @@ interface ChatMessage {
   results?: CrimeRecord[];
   breakdown?: BreakdownItem[];
   groupBy?: string;
+  detail?: CrimeDetail;
+  evidence?: Record<string, any>;
 }
 
 // Emoji/color accent per crime type
@@ -77,6 +116,20 @@ const GovHeader = ({
       onShowRecords();
     } else if (menuItem === 'DASHBOARD') {
       onNavigate('dashboard');
+    } else if (menuItem === 'NETWORK') {
+      onNavigate('network');
+    } else if (menuItem === 'MAP') {
+      onNavigate('hotspots');
+    } else if (menuItem === 'INSIGHTS') {
+      onNavigate('insights');
+    } else if (menuItem === 'PROFILES') {
+      onNavigate('profiles');
+    } else if (menuItem === 'FINANCE') {
+      onNavigate('finance');
+    } else if (menuItem === 'FORECAST') {
+      onNavigate('forecast');
+    } else if (menuItem === 'AUDIT') {
+      onNavigate('audit');
     } else if (menuItem === 'AI ASSISTANT' || menuItem === 'HOME') {
       onNavigate('chat');
     }
@@ -232,14 +285,22 @@ const GovHeader = ({
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
       }}>
         {(currentLanguage === 'en' 
-          ? ['HOME', 'ABOUT US', 'SERVICES', 'AI ASSISTANT', 'DASHBOARD', 'RECORDS', 'CONTACT', 'HELP']
-          : ['ಮುಖಪುಟ', 'ನಮ್ಮ ಬಗ್ಗೆ', 'ಸೇವೆಗಳು', 'AI ಸಹಾಯಕ', 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್', 'ದಾಖಲೆಗಳು', 'ಸಂಪರ್ಕ', 'ಸಹಾಯ']
+          ? ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'RECORDS', ...(user?.role === 'admin' ? ['AUDIT'] : [])]
+          : ['AI ಸಹಾಯಕ', 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್', 'ಜಾಲ', 'ನಕ್ಷೆ', 'ಒಳನೋಟ', 'ಪ್ರೊಫೈಲ್', 'ಹಣಕಾಸು', 'ಮುನ್ಸೂಚನೆ', 'ದಾಖಲೆಗಳು', ...(user?.role === 'admin' ? ['ಲೆಕ್ಕಪರಿಶೋಧನೆ'] : [])]
         ).map((item, idx) => {
-          const englishItem = ['HOME', 'ABOUT US', 'SERVICES', 'AI ASSISTANT', 'DASHBOARD', 'RECORDS', 'CONTACT', 'HELP'][idx];
+          const baseItems = ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'RECORDS', ...(user?.role === 'admin' ? ['AUDIT'] : [])];
+          const englishItem = baseItems[idx];
           // Determine if this menu item is active based on current view
           const isActive = 
             (currentView === 'chat' && englishItem === 'AI ASSISTANT') ||
-            (currentView === 'dashboard' && englishItem === 'DASHBOARD');
+            (currentView === 'dashboard' && englishItem === 'DASHBOARD') ||
+            (currentView === 'network' && englishItem === 'NETWORK') ||
+            (currentView === 'hotspots' && englishItem === 'MAP') ||
+            (currentView === 'insights' && englishItem === 'INSIGHTS') ||
+            (currentView === 'profiles' && englishItem === 'PROFILES') ||
+            (currentView === 'finance' && englishItem === 'FINANCE') ||
+            (currentView === 'forecast' && englishItem === 'FORECAST') ||
+            (currentView === 'audit' && englishItem === 'AUDIT');
           return (
             <div
               key={idx}
@@ -334,6 +395,80 @@ const BreakdownBars = ({ data, groupBy, language }: { data: BreakdownItem[]; gro
   );
 };
 
+// Full FIR detail card (accused, victims, investigation) — Phase 5
+const CrimeDetailCard = ({ detail, language }: { detail: CrimeDetail; language: 'en' | 'kn' }) => {
+  const t = (en: string, kn: string) => (language === 'en' ? en : kn);
+  const accent = accentFor(detail.crime_type);
+  const inv = detail.investigation;
+
+  const PersonChip = ({ p }: { p: PersonBrief }) => (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      backgroundColor: '#fff', border: '1px solid #e0e0e0', borderRadius: '14px',
+      padding: '3px 10px', fontSize: '12px', margin: '2px'
+    }}>
+      👤 {p.name}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}
+    </span>
+  );
+
+  return (
+    <div style={{
+      backgroundColor: '#ffffff', border: '1px solid #e0e0e0',
+      borderTop: `4px solid ${accent}`, borderRadius: '8px',
+      padding: '14px 16px', marginTop: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <span style={{ fontWeight: 700, color: accent, fontSize: '16px' }}>
+          {localizeCrimeType(detail.crime_type, language)}
+        </span>
+        <span style={{ fontFamily: 'monospace', color: '#1976d2', fontWeight: 600 }}>{detail.fir_number}</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', fontSize: '13px', color: '#444', marginBottom: '10px' }}>
+        <span>📍 {localizeDistrict(detail.district, language)}</span>
+        <span>📅 {detail.date_occurred}</span>
+        <span>🏢 {localizePlace(detail.police_station, language)}</span>
+      </div>
+      {detail.description && (
+        <div style={{ fontSize: '13px', color: '#666', backgroundColor: '#fafafa', padding: '8px 10px', borderRadius: '6px', marginBottom: '10px' }}>
+          📝 {localizeDescription(detail.description, language)}
+        </div>
+      )}
+
+      {/* Investigation block */}
+      {inv && (
+        <div style={{ backgroundColor: '#e8eaf6', borderRadius: '6px', padding: '10px 12px', marginBottom: '10px', fontSize: '13px' }}>
+          <div style={{ fontWeight: 600, color: '#1a237e', marginBottom: '4px' }}>🔎 {t('Investigation', 'ತನಿಖೆ')}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', color: '#333' }}>
+            <span><strong>{t('Status', 'ಸ್ಥಿತಿ')}:</strong> {inv.status || '—'}</span>
+            <span><strong>{t('Officer', 'ಅಧಿಕಾರಿ')}:</strong> {inv.officer || '—'}</span>
+            <span><strong>IPC:</strong> {inv.ipc_sections || '—'}</span>
+            <span><strong>{t('Arrest', 'ಬಂಧನ')}:</strong> {inv.arrest_made ? t('Yes', 'ಹೌದು') : t('No', 'ಇಲ್ಲ')}</span>
+            <span><strong>{t('Outcome', 'ಫಲಿತಾಂಶ')}:</strong> {inv.outcome || '—'}</span>
+          </div>
+        </div>
+      )}
+
+      {/* People */}
+      <div style={{ fontSize: '13px' }}>
+        <div style={{ marginBottom: '6px' }}>
+          <strong style={{ color: '#c62828' }}>🚩 {t('Accused', 'ಆರೋಪಿ')} ({detail.accused.length}):</strong>{' '}
+          {detail.accused.length ? detail.accused.map((p) => <PersonChip key={p.id} p={p} />) : <span style={{ color: '#999' }}>—</span>}
+        </div>
+        <div style={{ marginBottom: '6px' }}>
+          <strong style={{ color: '#1976d2' }}>🛡️ {t('Victims', 'ಸಂತ್ರಸ್ತರು')} ({detail.victims.length}):</strong>{' '}
+          {detail.victims.length ? detail.victims.map((p) => <PersonChip key={p.id} p={p} />) : <span style={{ color: '#999' }}>—</span>}
+        </div>
+        {detail.witnesses.length > 0 && (
+          <div>
+            <strong style={{ color: '#00897b' }}>👁️ {t('Witnesses', 'ಸಾಕ್ಷಿಗಳು')} ({detail.witnesses.length}):</strong>{' '}
+            {detail.witnesses.map((p) => <PersonChip key={p.id} p={p} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Filter chips showing what the AI detected
 const FilterChips = ({ entities, language }: { entities?: Record<string, any>; language: 'en' | 'kn' }) => {
   if (!entities) return null;
@@ -358,6 +493,48 @@ const FilterChips = ({ entities, language }: { entities?: Record<string, any>; l
           padding: '2px 8px', borderRadius: '12px', fontWeight: 500
         }}>{c}</span>
       ))}
+    </div>
+  );
+};
+
+// Expandable "Why this answer?" evidence trail (Explainable AI — Area 9)
+const EvidencePanel = ({ evidence, language }: { evidence: Record<string, any>; language: 'en' | 'kn' }) => {
+  const [open, setOpen] = useState(false);
+  const t = (en: string, kn: string) => (language === 'en' ? en : kn);
+  const filters = evidence.filters_applied || {};
+  const filterText = Object.keys(filters).length
+    ? Object.entries(filters).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ')
+    : t('none', 'ಇಲ್ಲ');
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{
+          background: 'none', border: 'none', color: '#1976d2', cursor: 'pointer',
+          fontSize: 12, fontWeight: 600, padding: 0
+        }}
+      >
+        {open ? '▼' : '▶'} 🔎 {t('Why this answer?', 'ಈ ಉತ್ತರ ಏಕೆ?')}
+      </button>
+      {open && (
+        <div style={{
+          marginTop: 6, background: '#f3f6fc', border: '1px solid #d6e0f0',
+          borderRadius: 6, padding: '10px 12px', fontSize: 12, color: '#333', lineHeight: 1.7
+        }}>
+          <div><strong>{t('Intent', 'ಉದ್ದೇಶ')}:</strong> {evidence.intent} ({t('confidence', 'ವಿಶ್ವಾಸ')} {(evidence.confidence * 100).toFixed(0)}%)</div>
+          <div><strong>{t('Filters applied', 'ಅನ್ವಯಿಸಿದ ಫಿಲ್ಟರ್‌ಗಳು')}:</strong> {filterText}</div>
+          <div><strong>{t('Records examined', 'ಪರಿಶೀಲಿಸಿದ ದಾಖಲೆಗಳು')}:</strong> {evidence.records_examined}</div>
+          <div><strong>{t('Data source', 'ಡೇಟಾ ಮೂಲ')}:</strong> {evidence.data_source}</div>
+          <div><strong>{t('Method', 'ವಿಧಾನ')}:</strong> {evidence.method}</div>
+          {evidence.normalized_query && (
+            <div><strong>{t('Interpreted as', 'ಅರ್ಥೈಸಲಾಗಿದೆ')}:</strong> "{evidence.normalized_query}"</div>
+          )}
+          {evidence.sql && (
+            <div style={{ marginTop: 4 }}><strong>SQL:</strong> <code style={{ fontSize: 11 }}>{evidence.sql}</code></div>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -427,6 +604,9 @@ const MessageBubble = ({ message, language }: { message: ChatMessage; language: 
             {/* Breakdown chart */}
             {hasBreakdown && <BreakdownBars data={message.breakdown!} groupBy={message.groupBy} language={language} />}
 
+            {/* FIR detail card */}
+            {message.detail && <CrimeDetailCard detail={message.detail} language={language} />}
+
             {/* Crime case cards */}
             {hasResults && (
               <div style={{ marginTop: '4px' }}>
@@ -438,6 +618,9 @@ const MessageBubble = ({ message, language }: { message: ChatMessage; language: 
                 </div>
               </div>
             )}
+
+            {/* Explainable-AI evidence trail */}
+            {!message.isUser && message.evidence && <EvidencePanel evidence={message.evidence} language={language} />}
           </>
         )}
       </div>
@@ -543,10 +726,12 @@ const InputField = ({
 // Government-styled voice button
 const VoiceButton = ({
   onVoiceResult,
-  disabled
+  disabled,
+  language
 }: {
   onVoiceResult: (text: string) => void;
   disabled?: boolean;
+  language: 'en' | 'kn';
 }) => {
   const [isListening, setIsListening] = useState(false);
 
@@ -559,7 +744,7 @@ const VoiceButton = ({
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
 
-    recognition.lang = 'en-IN';
+    recognition.lang = language === 'kn' ? 'kn-IN' : 'en-IN';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
@@ -622,6 +807,7 @@ const ChatPage: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewType>('chat');
   const [user, setUser] = useState<AuthUser | null>(getUser());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const conversationContext = useRef<any>(null);  // carries entities + last_fir across turns
 
   // Called when the token is rejected (expired/invalid) — force re-login
   const handleSessionExpired = () => {
@@ -677,6 +863,7 @@ const ChatPage: React.FC = () => {
   // Function to switch language
   const switchLanguage = (lang: 'en' | 'kn') => {
     setCurrentLanguage(lang);
+    conversationContext.current = null;  // fresh conversation
     const welcomeMessages = {
       en: "Namaste! 🙏 Welcome to Karnataka State Police Crime Database AI Assistant.\n\nI can help you query crime records across Karnataka. Ask questions like:\n• 'Show crimes in Bengaluru'\n• 'How many thefts in Mysuru last month'\n• 'Count murders in Belagavi'",
       kn: "ನಮಸ್ಕಾರ! 🙏 ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್ ಅಪರಾಧ ಡೇಟಾಬೇಸ್ AI ಸಹಾಯಕರಿಗೆ ಸ್ವಾಗತ.\n\nನಾನು ಕರ್ನಾಟಕದಾದ್ಯಂತ ಅಪರಾಧ ದಾಖಲೆಗಳನ್ನು ಪ್ರಶ್ನಿಸಲು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಲ್ಲೆ.\n\nಉದಾಹರಣೆಗಳು:\n• 'ಬೆಂಗಳೂರಿನಲ್ಲಿ ಅಪರಾಧಗಳನ್ನು ತೋರಿಸಿ'\n• 'ಮೈಸೂರಿನಲ್ಲಿ ಎಷ್ಟು ಕಳ್ಳತನಗಳು'\n• 'ಬೆಳಗಾವಿಯಲ್ಲಿ ಕೊಲೆಗಳನ್ನು ಎಣಿಸಿ'"
@@ -706,7 +893,8 @@ const ChatPage: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           text,
-          language: detectLanguage(text)
+          language: detectLanguage(text),
+          context: conversationContext.current
         })
       });
 
@@ -717,11 +905,40 @@ const ChatPage: React.FC = () => {
       const data = await response.json();
       setMessages(prev => prev.slice(0, -1));
 
+      // Persist conversation context for follow-up queries
+      if (data.context !== undefined) {
+        conversationContext.current = data.context;
+      }
+
       if (data.error) {
         setMessages(prev => [...prev, { 
           text: `⚠️ Error: ${data.error}\n\nPlease try rephrasing your query or include a location/date range.`, 
           isUser: false 
         }]);
+      } else if (data.intent === 'FIR_DETAIL') {
+        // Detail / follow-up about a specific FIR
+        setMessages(prev => [...prev, {
+          text: data.answer,
+          isUser: false,
+          intent: data.intent,
+          detail: data.detail
+        }]);
+      } else if (data.intent === 'CASE_SUMMARY') {
+        const cs = data.case_summary;
+        let txt = data.answer + '\n\n';
+        txt += (currentLanguage === 'en' ? '📅 Timeline:\n' : '📅 ಕಾಲರೇಖೆ:\n');
+        (cs.timeline || []).forEach((e: any) => { txt += `  • ${e.date} — ${e.event}\n`; });
+        txt += '\n' + (currentLanguage === 'en' ? '🔍 Investigative leads:\n' : '🔍 ತನಿಖಾ ಸುಳಿವುಗಳು:\n');
+        (cs.leads || []).forEach((l: string) => { txt += `  • ${l}\n`; });
+        setMessages(prev => [...prev, { text: txt, isUser: false, intent: data.intent, detail: cs.detail }]);
+      } else if (data.intent === 'SIMILAR_CASES') {
+        const sc = data.similar_cases;
+        let txt = data.answer + '\n\n';
+        (sc.similar_cases || []).forEach((c: any, i: number) => {
+          txt += `${i + 1}. ${c.fir_number} — ${c.crime_type}, ${c.district} (${c.date})\n`;
+          txt += `   ${currentLanguage === 'en' ? 'Outcome' : 'ಫಲಿತಾಂಶ'}: ${c.outcome || '—'} | ${currentLanguage === 'en' ? 'MO' : 'ವಿಧಾನ'}: ${c.modus_operandi || '—'}\n`;
+        });
+        setMessages(prev => [...prev, { text: txt, isUser: false, intent: data.intent }]);
       } else if (data.intent === 'BREAKDOWN_CRIMES') {
         // Render aggregation as a bar chart
         const breakdown = data.results || [];
@@ -733,7 +950,8 @@ const ChatPage: React.FC = () => {
           intent: data.intent,
           entities: data.entities,
           breakdown,
-          groupBy: data.entities?.group_by
+          groupBy: data.entities?.group_by,
+          evidence: data.evidence
         }]);
       } else {
         // SHOW / COUNT / UNKNOWN — render answer plus crime case cards
@@ -745,7 +963,8 @@ const ChatPage: React.FC = () => {
           isUser: false,
           intent: data.intent,
           entities: data.entities,
-          results
+          results,
+          evidence: data.evidence
         }]);
       }
     } catch (error: any) {
@@ -767,6 +986,82 @@ const ChatPage: React.FC = () => {
 
   const handleVoiceResult = (transcript: string) => {
     handleSubmit(transcript);
+  };
+
+  // Export the conversation as a PDF (via the browser's print-to-PDF, which
+  // renders Kannada correctly using system fonts and needs no dependencies).
+  const exportConversationPDF = () => {
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const rows = messages
+      .filter(m => !m.loading)
+      .map(m => {
+        const who = m.isUser ? (currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ') : 'KSP AI';
+        const side = m.isUser ? 'right' : 'left';
+        const bg = m.isUser ? '#e3f2fd' : '#f5f5f5';
+
+        // Build extra detail text for rich messages
+        let extra = '';
+        if (m.results && m.results.length) {
+          extra += m.results.map((c, i) =>
+            `<div class="rec">${i + 1}. <b>${esc(localizeCrimeType(c.crime_type, currentLanguage))}</b> — ${esc(localizeDistrict(c.district, currentLanguage))} | FIR: ${esc(c.fir_number || '')} | ${esc(c.date_occurred || '')}<br/><span class="desc">${esc(localizeDescription(c.description, currentLanguage))}</span></div>`
+          ).join('');
+        }
+        if (m.breakdown && m.breakdown.length) {
+          extra += m.breakdown.map(b =>
+            `<div class="rec">${esc(localizeLabel(b.label, currentLanguage))}: <b>${b.count}</b></div>`
+          ).join('');
+        }
+        if (m.detail) {
+          const d = m.detail;
+          const inv = d.investigation;
+          extra += `<div class="rec"><b>${esc(d.fir_number)}</b> — ${esc(localizeCrimeType(d.crime_type, currentLanguage))}, ${esc(localizeDistrict(d.district, currentLanguage))}, ${esc(d.date_occurred)}`;
+          if (inv) extra += `<br/>Status: ${esc(inv.status || '—')} | Officer: ${esc(inv.officer || '—')} | IPC: ${esc(inv.ipc_sections || '—')}`;
+          extra += `<br/>Accused: ${esc(d.accused.map(p => p.name).join(', ') || '—')}`;
+          extra += `<br/>Victims: ${esc(d.victims.map(p => p.name).join(', ') || '—')}</div>`;
+        }
+
+        return `<div class="msg ${side}"><div class="bubble" style="background:${bg}"><div class="who">${who}</div><div class="txt">${esc(m.text)}</div>${extra}</div></div>`;
+      })
+      .join('');
+
+    const title = currentLanguage === 'en'
+      ? 'KSP Crime AI — Conversation Transcript'
+      : 'ಕೆಎಸ್‌ಪಿ ಅಪರಾಧ AI — ಸಂಭಾಷಣೆ ದಾಖಲೆ';
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${title}</title>
+<style>
+  body{font-family:"Segoe UI",Tahoma,sans-serif;margin:30px;color:#212121;}
+  .hdr{border-bottom:3px solid #ff9800;padding-bottom:12px;margin-bottom:20px;}
+  .hdr h1{color:#1a237e;font-size:20px;margin:0;}
+  .hdr .sub{color:#666;font-size:13px;margin-top:4px;}
+  .msg{display:flex;margin:10px 0;}
+  .msg.right{justify-content:flex-end;}
+  .bubble{max-width:75%;border:1px solid #e0e0e0;border-radius:8px;padding:10px 14px;}
+  .who{font-size:11px;font-weight:700;color:#1a237e;margin-bottom:4px;}
+  .txt{font-size:14px;white-space:pre-wrap;line-height:1.5;}
+  .rec{font-size:12px;color:#444;border-top:1px solid #eee;margin-top:6px;padding-top:6px;}
+  .desc{color:#777;}
+  .ftr{margin-top:24px;border-top:1px solid #ccc;padding-top:10px;font-size:11px;color:#999;text-align:center;}
+</style></head><body>
+  <div class="hdr"><h1>🛡️ ${title}</h1>
+  <div class="sub">${currentLanguage === 'en' ? 'Government of Karnataka · Karnataka State Police' : 'ಕರ್ನಾಟಕ ಸರ್ಕಾರ · ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್'} · ${new Date().toLocaleString()}</div>
+  <div class="sub">${currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ'}: ${esc(user?.name || '')}</div></div>
+  ${rows}
+  <div class="ftr">${currentLanguage === 'en' ? 'Confidential — for authorized law enforcement use only.' : 'ಗೌಪ್ಯ — ಅಧಿಕೃತ ಕಾನೂನು ಜಾರಿ ಬಳಕೆಗೆ ಮಾತ್ರ.'}</div>
+  <script>window.onload=function(){window.print();}</script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(html);
+      w.document.close();
+    } else {
+      alert(currentLanguage === 'en'
+        ? 'Please allow pop-ups to export the PDF.'
+        : 'PDF ರಫ್ತು ಮಾಡಲು ಪಾಪ್‌ಅಪ್‌ಗಳನ್ನು ಅನುಮತಿಸಿ.');
+    }
   };
 
   // If not authenticated, show the login screen
@@ -808,6 +1103,20 @@ const ChatPage: React.FC = () => {
         <span style={{ color: '#1976d2', fontWeight: '600' }}>
           {currentView === 'dashboard'
             ? (currentLanguage === 'en' ? ' Dashboard' : ' ಡ್ಯಾಶ್‌ಬೋರ್ಡ್')
+            : currentView === 'network'
+            ? (currentLanguage === 'en' ? ' Network Analysis' : ' ಜಾಲ ವಿಶ್ಲೇಷಣೆ')
+            : currentView === 'hotspots'
+            ? (currentLanguage === 'en' ? ' Hotspot Map' : ' ಹಾಟ್‌ಸ್ಪಾಟ್ ನಕ್ಷೆ')
+            : currentView === 'insights'
+            ? (currentLanguage === 'en' ? ' Sociological Insights' : ' ಸಾಮಾಜಿಕ ಒಳನೋಟಗಳು')
+            : currentView === 'profiles'
+            ? (currentLanguage === 'en' ? ' Offender Profiling' : ' ಅಪರಾಧಿ ವಿಶ್ಲೇಷಣೆ')
+            : currentView === 'finance'
+            ? (currentLanguage === 'en' ? ' Financial Analysis' : ' ಆರ್ಥಿಕ ವಿಶ್ಲೇಷಣೆ')
+            : currentView === 'forecast'
+            ? (currentLanguage === 'en' ? ' Forecasting' : ' ಮುನ್ಸೂಚನೆ')
+            : currentView === 'audit'
+            ? (currentLanguage === 'en' ? ' Audit Log' : ' ಲೆಕ್ಕಪರಿಶೋಧನೆ')
             : (currentLanguage === 'en' ? ' AI Assistant' : ' AI ಸಹಾಯಕ')}
         </span>
       </div>
@@ -816,6 +1125,55 @@ const ChatPage: React.FC = () => {
       {currentView === 'dashboard' && (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
           <Dashboard language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Network analysis view */}
+      {currentView === 'network' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <NetworkView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Hotspot map view */}
+      {currentView === 'hotspots' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <HotspotView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Sociological insights view */}
+      {currentView === 'insights' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <InsightsView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Offender profiles view */}
+      {currentView === 'profiles' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <ProfilesView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Financial crime view */}
+      {currentView === 'finance' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <FinanceView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Forecast view */}
+      {currentView === 'forecast' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <ForecastView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Audit log view (admin only) */}
+      {currentView === 'audit' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <AuditView language={currentLanguage} />
         </div>
       )}
 
@@ -855,7 +1213,7 @@ const ChatPage: React.FC = () => {
             alignItems: 'center',
             marginBottom: '12px'
           }}>
-            <VoiceButton onVoiceResult={handleVoiceResult} disabled={isLoading} />
+            <VoiceButton onVoiceResult={handleVoiceResult} disabled={isLoading} language={currentLanguage} />
             <InputField
               onSubmit={handleSubmit}
               placeholder={currentLanguage === 'en' 
@@ -863,6 +1221,18 @@ const ChatPage: React.FC = () => {
                 : "ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಇಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ..."}
               disabled={isLoading}
             />
+            <button
+              onClick={exportConversationPDF}
+              title={currentLanguage === 'en' ? 'Export conversation as PDF' : 'ಸಂಭಾಷಣೆಯನ್ನು PDF ಆಗಿ ರಫ್ತು ಮಾಡಿ'}
+              style={{
+                backgroundColor: '#ff9800', color: 'white', border: 'none',
+                borderRadius: '6px', padding: '14px 18px', cursor: 'pointer',
+                fontSize: '15px', fontWeight: 600, whiteSpace: 'nowrap',
+                boxShadow: '0 2px 4px rgba(255,152,0,0.3)'
+              }}
+            >
+              📄 PDF
+            </button>
           </div>
           <div style={{
             fontSize: '12px',
