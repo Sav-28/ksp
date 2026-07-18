@@ -150,34 +150,61 @@ async def list_offenders(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Ranked list of repeat offenders by computed risk score."""
-    # Persons accused in 2+ cases = repeat offenders
+    """Ranked list of repeat offenders by computed risk score (bulk-optimized)."""
+    # Pull all accused links joined with their crimes in ONE query.
     rows = (
-        db.query(CasePerson.person_id, func.count(CasePerson.id).label("n"))
+        db.query(
+            CasePerson.person_id,
+            Crime.crime_type,
+            Crime.date_occurred,
+        )
+        .join(Crime, Crime.id == CasePerson.crime_id)
         .filter(CasePerson.role == "accused")
-        .group_by(CasePerson.person_id)
-        .having(func.count(CasePerson.id) >= 2)
         .all()
     )
 
+    # Aggregate per person in Python (no per-person DB hits).
+    from collections import defaultdict
+    agg: Dict[int, Dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "severity": 0, "types": [], "latest_year": 0}
+    )
+    for person_id, ctype, dt in rows:
+        a = agg[person_id]
+        a["count"] += 1
+        a["severity"] += SEVERITY.get(ctype, 3)
+        a["types"].append(ctype)
+        if dt:
+            a["latest_year"] = max(a["latest_year"], dt.year)
+
+    # Repeat offenders only (2+ accused cases).
+    repeat_ids = [pid for pid, a in agg.items() if a["count"] >= 2]
+    if not repeat_ids:
+        return {"total_repeat_offenders": 0, "offenders": []}
+
+    # Gang members in one query.
+    gang_ids = {
+        gm.person_id for gm in db.query(GangMember.person_id)
+        .filter(GangMember.person_id.in_(repeat_ids)).all()
+    }
+    # Person records in one query.
+    persons = {p.id: p for p in db.query(Person).filter(Person.id.in_(repeat_ids)).all()}
+
+    current_year = date.today().year
     offenders = []
-    for person_id, n in rows:
-        p = db.query(Person).get(person_id)
+    for pid in repeat_ids:
+        p = persons.get(pid)
         if not p:
             continue
-        risk = compute_risk(db, person_id)
-        # Persist the score for reuse elsewhere
-        p.risk_score = risk["risk_score"]
+        a = agg[pid]
+        is_gang = pid in gang_ids
+        recency_bonus = 10 if a["latest_year"] >= (current_year - 1) else 0
+        raw = (a["count"] * 8) + (a["severity"] * 1.5) + (20 if is_gang else 0) + recency_bonus
+        score = round(min(raw, 100.0), 1)
+        p.risk_score = score
         offenders.append({
-            "person_id": p.id,
-            "name": p.full_name,
-            "age": p.age,
-            "gender": p.gender,
-            "district": p.district,
-            "cases": n,
-            "risk_score": risk["risk_score"],
-            "gang_member": risk["factors"]["gang_member"],
-            "crime_types": risk["factors"]["crime_types"],
+            "person_id": p.id, "name": p.full_name, "age": p.age, "gender": p.gender,
+            "district": p.district, "cases": a["count"], "risk_score": score,
+            "gang_member": is_gang, "crime_types": list(dict.fromkeys(a["types"])),
         })
     db.commit()
 

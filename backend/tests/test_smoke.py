@@ -10,6 +10,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+# Pin tests to the deterministic rule-based NLP so they don't depend on a
+# running Ollama instance or vary with LLM output. The LLM path is tested
+# separately (test_llm.py).
+os.environ["KSP_NLP_PROVIDER"] = "rules"
+
 import pytest
 from fastapi.testclient import TestClient
 from main import app

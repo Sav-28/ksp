@@ -120,6 +120,21 @@ Completes Area 10 and production-readiness.
 - **Deployment**: backend `Dockerfile`, frontend `Dockerfile` (nginx), `docker-compose.yml`, and `backend/.env.example` documenting all config.
 - **Test suite**: `backend/tests/test_smoke.py` — 13 pytest cases (auth, queries, Kannada, follow-up context, intelligence endpoints, RBAC) — all passing via FastAPI TestClient.
 
+### ✅ Betterment B1 — LLM-Powered Conversational Understanding (DONE)
+Upgrades Area 1 from keyword-matching to genuine conversational AI.
+- **Local LLM via Ollama** (`qwen2.5:3b`) as a decoupled understanding layer (`src/ai/ollama_client.py`, `src/ai/language_provider.py`): natural language → strict `{intent, entities}` JSON. Runs fully on-machine — free, private, no per-query cost.
+- The LLM **never touches the database** — it only interprets; the existing parameterized query engine executes deterministically (injection-safe, auditable).
+- **Automatic fallback** to the rule-based classifier if Ollama is unavailable/slow — the system never goes down. Switchable via `KSP_NLP_PROVIDER`.
+- **Cold-start handled**: startup pre-warms the model and primes the system-prompt cache, so the first live query is fast.
+- **Explainability**: the evidence panel now shows which engine understood the query ("ollama:qwen2.5:3b").
+- **Verified** on unrehearsed queries: "which areas are seeing the most chain snatching lately?" → breakdown by district + Snatching filter; "give me a rundown of murder cases in mysuru" → SHOW; Kannada queries mapped to canonical English entities. Pytest pinned to the rule engine for determinism.
+
+### ✅ Betterment B2 — Larger Narrative Dataset (DONE)
+Scaled the database and planted discoverable stories so analytics and the AI have real signal.
+- **`generate_narrative_data.py`**: ~920 crimes (was 154), 1,500 persons, 2,650+ case links, 6 gangs, 530 accounts, 1,080+ transactions — same schema, no code/feature changes.
+- **Planted narratives:** (1) "Shadow Hawks" chain-snatching gang escalating in specific Bengaluru Urban stations (shows as the top hotspot + a +77 emerging surge + a forecast alert + a network cluster); (2) a money-laundering ring (₹1.08cr across 5 flagged, connected accounts); (3) escalating repeat offender "Vikram Reddy" (theft→…→murder, leads the "Mysuru Mavericks"); (4) a festival-season theft spike.
+- **Performance:** optimized `/api/offenders` from per-offender N+1 queries to bulk aggregation, so risk ranking stays fast at the larger scale.
+
 ---
 
 ## 3. Project Structure

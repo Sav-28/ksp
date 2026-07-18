@@ -36,8 +36,21 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    """Ensure all database tables (including audit_logs) exist."""
+    """Ensure all database tables (including audit_logs) exist, and warm up the LLM."""
     create_tables()
+
+    # Pre-load the Ollama model in the background so the first query is fast.
+    if os.getenv("KSP_NLP_PROVIDER", "ollama").lower() == "ollama":
+        import threading
+        from src.ai import ollama_client
+        from src.ai import language_provider
+
+        def _warm():
+            if ollama_client.is_available():
+                ollama_client.warmup()          # load model into memory
+                language_provider.warmup()      # prime the system-prompt cache
+
+        threading.Thread(target=_warm, daemon=True).start()
 
 
 # Include routers

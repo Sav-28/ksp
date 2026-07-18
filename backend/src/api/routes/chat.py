@@ -9,9 +9,10 @@ import os
 # Import real services
 from src.nlp.intent_classifier import nlp_service
 from src.nlp.followup import detect_detail_request, detect_case_action, extract_fir_number, merge_context
+from src.ai.language_provider import get_intent_and_entities as understand
 from src.query_engine.translator import QueryTranslator
 from src.database.session import get_db
-from src.database.models import AuditLog
+from src.database.models import AuditLog, CasePerson, Person, FIRDetails
 from src.api.auth import get_current_user
 from src.services.crime_detail import get_crime_detail
 
@@ -22,6 +23,38 @@ query_engine = QueryTranslator()
 
 # Whether to expose generated SQL in responses (debugging only)
 EXPOSE_SQL = os.getenv("KSP_EXPOSE_SQL", "false").lower() == "true"
+
+
+def enrich_results(db: Session, results: list) -> list:
+    """
+    Attach accused names and investigation status to each crime result, in bulk
+    (no per-row queries). So every FIR card can show who was accused.
+    """
+    ids = [r["id"] for r in results if isinstance(r, dict) and r.get("id")]
+    if not ids:
+        return results
+
+    from collections import defaultdict
+    accused_map = defaultdict(list)
+    for crime_id, name in (
+        db.query(CasePerson.crime_id, Person.full_name)
+        .join(Person, Person.id == CasePerson.person_id)
+        .filter(CasePerson.crime_id.in_(ids), CasePerson.role == "accused")
+        .all()
+    ):
+        accused_map[crime_id].append(name)
+
+    status_map = {
+        cid: st for cid, st in
+        db.query(FIRDetails.crime_id, FIRDetails.investigation_status)
+        .filter(FIRDetails.crime_id.in_(ids)).all()
+    }
+
+    for r in results:
+        if isinstance(r, dict) and r.get("id"):
+            r["accused"] = accused_map.get(r["id"], [])
+            r["investigation_status"] = status_map.get(r["id"])
+    return results
 
 
 def build_detail_answer(detail: Dict[str, Any], detail_type: str) -> str:
@@ -178,8 +211,8 @@ async def chat_endpoint(
                 "error": None,
             }
 
-        # Call NLP service to get intent/entities
-        nlp_output = nlp_service.get_intent_and_entities(input_text, language=language)
+        # Call NLP service to get intent/entities (LLM-backed, with rule fallback)
+        nlp_output = understand(input_text, language=language)
         intent = nlp_output.get("intent")
 
         # Carry forward entities from the previous turn for follow-up queries
@@ -276,6 +309,10 @@ async def chat_endpoint(
         confidence = nlp_output.get("confidence", 0.0)
         entities = nlp_output.get("entities", {})
 
+        # Enrich SHOW/COUNT records with accused names + investigation status
+        if intent in ("SHOW_CRIMES", "COUNT_CRIMES") and results:
+            results = enrich_results(db, results)
+
         # Build a human-readable summary of the filters that were applied
         filter_parts = []
         if entities.get("crime_type"):
@@ -338,6 +375,7 @@ async def chat_endpoint(
                 "BREAKDOWN_CRIMES": "Aggregated crime records grouped by the requested dimension.",
             }.get(intent, "Database query."),
             "normalized_query": nlp_output.get("normalized_query"),
+            "engine": nlp_output.get("engine", "rules"),
             "sql": sql if EXPOSE_SQL else None,
         }
 

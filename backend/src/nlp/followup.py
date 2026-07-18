@@ -76,6 +76,40 @@ def detect_case_action(text: str) -> Optional[str]:
     return None
 
 
+# Person-by-name queries (Area 1 retrieval): "crimes done by X", "X's record"
+_PERSON_RE = re.compile(
+    r'(?:crimes?|cases?|records?|offences?|offenses?|history|everything|activities|acts)\s+'
+    r'(?:done\s+|committed\s+|registered\s+|reported\s+)?'
+    r'(?:by|of|against|involving|for)\s+([a-zA-Z][a-zA-Z .\'-]{2,40})',
+    re.IGNORECASE,
+)
+_PERSON_STOP = {
+    "district", "districts", "type", "types", "category", "categories", "month",
+    "months", "area", "areas", "location", "locations", "crime", "crimes", "station",
+    "police", "each", "theft", "murder", "snatching", "robbery", "assault", "burglary",
+    "rioting", "cheating", "forgery", "counterfeiting", "bengaluru", "mysuru", "belagavi",
+    "kalaburagi", "mangaluru", "hubli", "dharwad", "tumakuru", "raichur",
+}
+
+
+def detect_person_query(text: str) -> Optional[str]:
+    """
+    Best-effort extraction of a person name from queries like
+    "all crimes done by Abdul Rao". Guarded against matching districts,
+    crime types, or grouping words. Returns the name or None.
+    """
+    m = _PERSON_RE.search(text)
+    if not m:
+        return None
+    name = m.group(1).strip().strip("?.!").strip()
+    if not name:
+        return None
+    first = name.split()[0].lower()
+    if name.lower() in _PERSON_STOP or first in _PERSON_STOP:
+        return None
+    return name.title()
+
+
 def merge_context(entities: Dict[str, Any], context: Optional[Dict[str, Any]], text: str) -> Dict[str, Any]:
     """
     Carry forward entities from the previous turn for follow-up queries.

@@ -28,6 +28,8 @@ interface CrimeRecord {
   description?: string;
   latitude?: number;
   longitude?: number;
+  accused?: string[];
+  investigation_status?: string;
 }
 
 interface BreakdownItem {
@@ -90,6 +92,17 @@ const accentFor = (crimeType?: string): string => {
   const key = crimeType.toLowerCase();
   return CRIME_ACCENT[key] || '#1a237e';
 };
+
+// Investigation-status pill colors
+const STATUS_COLOR: Record<string, { bg: string; fg: string }> = {
+  'registered': { bg: '#e3f2fd', fg: '#1565c0' },
+  'under investigation': { bg: '#fff3e0', fg: '#e65100' },
+  'chargesheet filed': { bg: '#ede7f6', fg: '#5e35b1' },
+  'closed': { bg: '#eceff1', fg: '#546e7a' },
+  'convicted': { bg: '#e8f5e9', fg: '#2e7d32' },
+  'acquitted': { bg: '#fce4ec', fg: '#c2185b' },
+};
+const statusStyle = (s?: string) => STATUS_COLOR[(s || '').toLowerCase()] || { bg: '#eceff1', fg: '#546e7a' };
 
 // Government-styled header component
 const GovHeader = ({ 
@@ -327,42 +340,62 @@ const GovHeader = ({
   );
 };
 
-// A single crime case card
+// A single crime case card — scannable layout with accused name + status
 const CrimeCaseCard = ({ crime, index, language }: { crime: CrimeRecord; index: number; language: 'en' | 'kn' }) => {
   const accent = accentFor(crime.crime_type);
+  const t = (en: string, kn: string) => (language === 'en' ? en : kn);
+  const accused = crime.accused || [];
+  const accusedText = accused.length
+    ? (accused.length > 2 ? `${accused.slice(0, 2).join(', ')} +${accused.length - 2}` : accused.join(', '))
+    : t('Unknown', 'ಅಜ್ಞಾತ');
+  const st = statusStyle(crime.investigation_status);
+
   return (
     <div style={{
       backgroundColor: '#ffffff',
-      border: '1px solid #e0e0e0',
-      borderLeft: `4px solid ${accent}`,
+      border: '1px solid #e6e6e6',
+      borderLeft: `5px solid ${accent}`,
       borderRadius: '8px',
       padding: '12px 14px',
       marginBottom: '10px',
       boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
+      {/* Header: index + crime type + status pill + FIR */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{
-            backgroundColor: accent, color: 'white', fontSize: '11px', fontWeight: 700,
-            padding: '3px 8px', borderRadius: '4px'
-          }}>
+          <span style={{ backgroundColor: accent, color: 'white', fontSize: '11px', fontWeight: 700, padding: '3px 7px', borderRadius: '4px' }}>
             #{index + 1}
           </span>
           <span style={{ fontWeight: 700, color: accent, fontSize: '15px' }}>
-            {localizeCrimeType(crime.crime_type, language) || (language === 'en' ? 'Unknown' : 'ಅಜ್ಞಾತ')}
+            {localizeCrimeType(crime.crime_type, language)}
           </span>
+          {crime.investigation_status && (
+            <span style={{ backgroundColor: st.bg, color: st.fg, fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '10px' }}>
+              {crime.investigation_status}
+            </span>
+          )}
         </div>
-        <span style={{ fontSize: '12px', color: '#1976d2', fontWeight: 600, fontFamily: 'monospace' }}>
+        <span style={{ fontSize: '12px', color: '#1976d2', fontWeight: 700, fontFamily: 'monospace' }}>
           {crime.fir_number || '—'}
         </span>
       </div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', fontSize: '13px', color: '#444', marginBottom: '8px' }}>
-        <span>📍 <strong>{localizeDistrict(crime.district, language) || '—'}</strong>{crime.taluk ? `, ${localizePlace(crime.taluk, language)}` : ''}</span>
-        <span>📅 {crime.date_occurred || '—'}</span>
-        <span>🏢 {localizePlace(crime.police_station, language) || '—'}</span>
+
+      {/* Accused — the headline person info */}
+      <div style={{ marginTop: '8px', fontSize: '14px', color: '#212121' }}>
+        <span style={{ color: '#c62828', fontWeight: 600 }}>🚩 {t('Accused', 'ಆರೋಪಿ')}:</span>{' '}
+        <strong>{accusedText}</strong>
       </div>
+
+      {/* Meta row */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', fontSize: '13px', color: '#555', marginTop: '6px' }}>
+        <span>📍 {localizeDistrict(crime.district, language)}</span>
+        <span>📅 {crime.date_occurred || '—'}</span>
+        <span>🏢 {localizePlace(crime.police_station, language)}</span>
+      </div>
+
+      {/* Description */}
       {crime.description && (
-        <div style={{ fontSize: '13px', color: '#666', backgroundColor: '#fafafa', padding: '8px 10px', borderRadius: '6px', lineHeight: 1.5 }}>
+        <div style={{ fontSize: '12.5px', color: '#777', marginTop: '6px' }}>
           📝 {localizeDescription(crime.description, language)}
         </div>
       )}
@@ -523,6 +556,9 @@ const EvidencePanel = ({ evidence, language }: { evidence: Record<string, any>; 
           borderRadius: 6, padding: '10px 12px', fontSize: 12, color: '#333', lineHeight: 1.7
         }}>
           <div><strong>{t('Intent', 'ಉದ್ದೇಶ')}:</strong> {evidence.intent} ({t('confidence', 'ವಿಶ್ವಾಸ')} {(evidence.confidence * 100).toFixed(0)}%)</div>
+          {evidence.engine && (
+            <div><strong>{t('Understood by', 'ಅರ್ಥೈಸಿದವರು')}:</strong> {evidence.engine}</div>
+          )}
           <div><strong>{t('Filters applied', 'ಅನ್ವಯಿಸಿದ ಫಿಲ್ಟರ್‌ಗಳು')}:</strong> {filterText}</div>
           <div><strong>{t('Records examined', 'ಪರಿಶೀಲಿಸಿದ ದಾಖಲೆಗಳು')}:</strong> {evidence.records_examined}</div>
           <div><strong>{t('Data source', 'ಡೇಟಾ ಮೂಲ')}:</strong> {evidence.data_source}</div>

@@ -1,190 +1,240 @@
-# KSP Crime AI
+# KSP Crime AI — Conversational Crime Intelligence & Analytics Platform
 
-A conversational interface for querying crime databases, designed for Karnataka State Police (KSP) officers. This MVP allows officers to ask questions about crime data using natural language in English or Kannada.
+An AI-powered platform for the **Karnataka State Police** that lets investigators,
+analysts, and policymakers interact with the state crime database using natural
+language (English **and** Kannada), and go far beyond simple retrieval —
+discovering criminal networks, profiling offenders, surfacing socio-demographic
+patterns, tracing financial trails, and forecasting emerging crime.
+
+> Built for the conversational-crime-intelligence challenge. Covers all 10
+> framework areas — see the mapping below.
+
+---
+
+## Challenge Coverage
+
+| # | Challenge Area | Status | Where |
+|---|----------------|--------|-------|
+| 1 | Conversational Crime Intelligence (EN + Kannada, voice, context, PDF export) | ✅ | AI Assistant tab |
+| 2 | Criminal Network & Relationship Analysis | ✅ | NETWORK tab |
+| 3 | Crime Pattern, Trend & Hotspot Analytics | ✅ | DASHBOARD + MAP tabs |
+| 4 | Sociological Crime Insights | ✅ | INSIGHTS tab |
+| 5 | Criminology-Based Offender Profiling | ✅ | PROFILES tab |
+| 6 | Investigator Decision Support | ✅ | chat: "summarize / similar cases" |
+| 7 | Financial Crime & Transaction Link Analysis | ✅ | FINANCE tab |
+| 8 | Crime Forecasting & Early Warning | ✅ | FORECAST tab |
+| 9 | Explainable AI & Transparent Analytics | ✅ | "Why this answer?" on every reply |
+| 10 | Secure Role-Based Access & Governance | ✅ | auth + AUDIT tab (admin) |
+
+For a detailed phase-by-phase changelog, see **[PROJECT_STATUS.md](PROJECT_STATUS.md)**.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Python, FastAPI, SQLAlchemy |
+| Database | SQLite (dev) / PostgreSQL (prod) — DB-agnostic ORM |
+| NLP | scikit-learn (TF-IDF + LogisticRegression) + rule-based entities + Kannada normalization |
+| Conversational AI (planned upgrade) | Local LLM via **Ollama** (`qwen2.5:3b`) as a decoupled understanding/narration service |
+| Frontend | React 18 + TypeScript |
+| Auth | HMAC-signed tokens + PBKDF2 password hashing + role-based access |
+| Charts/Graph/Map | Hand-built SVG (no external chart/graph dependency) |
+| Deployment | Zoho Catalyst (web + API) + decoupled AI service; Docker provided |
+
+---
+
+## Features
+
+**Conversational interface** — natural-language queries in English & Kannada,
+voice input, context-aware follow-ups ("and in Mysuru?", "who was the accused?"),
+and one-click conversation export to PDF.
+
+**Analytics dashboard** — totals and breakdowns by district, crime type, and
+month, with trend and bar charts.
+
+**Criminal network analysis** — interactive force-directed graph of associations
+between offenders and gangs, with organized-crime clustering.
+
+**Hotspot map** — geographic crime distribution with district hotspots and
+90-day emerging-surge alerts.
+
+**Sociological insights** — accused breakdown by age, gender, socio-economic
+status, education, and occupation.
+
+**Offender profiling** — repeat-offender ranking with an explainable 0-100 risk
+score, primary modus operandi, and full case history.
+
+**Decision support** — automated case summaries, timelines, investigative leads,
+and similar-case matching with outcomes.
+
+**Financial analysis** — suspicious money-trail tracing linked to cases.
+
+**Forecasting** — next-month projection plus district early-warning alerts.
+
+**Explainable AI** — every answer carries an evidence trail (intent, confidence,
+filters, records examined, data source, interpretation).
+
+**Governance** — token auth, PBKDF2-hashed passwords, role-based access
+(officer / admin), and a persisted, admin-viewable audit log.
+
+---
 
 ## Architecture
 
-This project follows a monolithic MVP architecture with clear separation of concerns:
-
 ```
-ksp-crime-ai/
-├── backend/                    # Python/FastAPI monolith
-│   ├── src/
-│   │   ├── api/               # HTTP layer (FastAPI)
-│   │   │   └── routes/        # POST /chat endpoint
-│   │   ├── database/          # Data layer (SQLAlchemy + Alembic)
-│   │   │   ├── models/        # SQLAlchemy models
-│   │   │   ├── seeds/         # Initial data scripts
-│   │   │   └── migrations/    # Alembic migrations
-│   │   ├── nlp/               # NLP pipeline
-│   │   │   ├── intent_classifier.py   # TF-IDF + LogisticRegression
-│   │   │   └── ...            # Future: entity extractor, language detector
-│   │   ├── query_engine/      # SQL translation & validation
-│   │   │   ├── translator.py    # Intent → parameterized SQL
-│   │   │   └── validators.py    # Input sanitization rules
-│   │   └── utils/             # Logging, audit helpers
-│   ├── tests/                 # Unit/integration tests
-│   ├── requirements.txt       # Python dependencies
-│   └── main.py                # App entrypoint
-├── frontend/                  # React SPA (low-literacy tablet UI)
-│   ├── src/
-│   │   ├── components/        # MessageBubble, InputField, VoiceButton
-│   │   ├── pages/             # ChatPage.tsx
-│   │   ├── hooks/             # Custom API hooks
-│   │   └── utils/             # Speech recognition helpers
-│   ├── public/
-│   └── package.json           # Frontend dependencies
-├── docs/                      # Architectural decisions (human-maintained)
-│   ├── schema.sql             # Canonical DB schema
-│   ├── intent_taxonomy.md     # Core intents/entities
-│   ├── api_contract.md        # /chat spec
-│   └── wireframes/            # ChatPage layout
-├── data/                      # Seed data
-│   └── initial_seeds.csv
-└── .claude/                   # Claude Code settings
+        Browser (police stations — zero install)
+                  │ HTTPS
+        ┌─────────▼──────────┐
+        │   ZOHO CATALYST    │   React web app + API functions + database
+        └─────────┬──────────┘
+                  │ HTTPS (natural-language understanding only)
+        ┌─────────▼──────────┐
+        │   AI SERVICE       │   FastAPI + Ollama (qwen2.5:3b)
+        │  text → {intent,   │   runs on a GPU server in production;
+        │  entities} JSON    │   falls back to rule-based NLP if offline
+        └────────────────────┘
 ```
 
-## Features (MVP)
+The LLM never touches the database — it only translates language into the
+existing **safe, parameterized query engine**, which executes deterministically.
+This keeps queries injection-safe and answers auditable.
 
-- Natural language query interface
-- English language support (Kannada planned for future)
-- Voice input via Web Speech API
-- Database-backed crime records
-- Secure parameterized queries to prevent SQL injection
-- Audit logging for accountability
-- Responsive design for tablet use
+```
+backend/
+├── main.py                       # FastAPI app, routers, CORS, startup
+├── generate_sample_data.py       # seeds 154 crime incidents
+├── generate_phase4_data.py       # seeds persons, gangs, FIRs, money trails
+├── src/
+│   ├── api/
+│   │   ├── auth.py               # tokens, password hashing, require_role()
+│   │   └── routes/               # chat, stats, network, hotspots, insights,
+│   │       │                     #   decision_support, details, audit, auth
+│   ├── database/                 # models.py (full schema), session.py
+│   ├── nlp/                      # intent_classifier, followup, kannada_support
+│   ├── query_engine/             # translator.py (intent → safe SQL)
+│   └── services/                 # crime_detail.py
+└── tests/test_smoke.py           # 13 pytest cases
+frontend/src/
+├── pages/ChatPage.tsx            # main app + chat
+├── components/                   # Dashboard, NetworkView/Graph, HotspotView,
+│   │                             #   InsightsView, ProfilesView, FinanceView,
+│   │                             #   ForecastView, AuditView, Login
+├── api.ts                        # API base, token, authenticated fetch
+└── locale.ts                     # Kannada localization of data + answers
+```
+
+---
 
 ## Getting Started
 
 ### Prerequisites
+- Python 3.8+ and Node.js 16+
+- (Optional, for the AI upgrade) [Ollama](https://ollama.com) with `qwen2.5:3b`
 
-- Python 3.8+
-- Node.js 16+
-- PostgreSQL 12+
+### Backend
+```bash
+cd backend
+pip install -r requirements.txt
+python generate_sample_data.py     # first run — seed crime incidents
+python generate_phase4_data.py     # first run — seed people/gangs/finance
+python src/nlp/train_model.py       # first run — train the NLP model
+python main.py                      # serves at http://localhost:8004
+```
 
-### Backend Setup
+### Frontend
+```bash
+cd frontend
+npm install
+npm start                           # serves at http://localhost:3000
+```
 
-1. Navigate to the backend directory:
-   ```bash
-   cd ksp-crime-ai/backend
-   ```
+### (Optional) AI service with Ollama
+```bash
+ollama pull qwen2.5:3b
+# the decoupled AI service (FastAPI + Ollama) is wired via env config
+```
 
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Demo credentials
+| Username | Password | Role |
+|----------|----------|------|
+| officer | ksp@2024 | officer |
+| admin | admin@2024 | admin (sees AUDIT tab) |
 
-3. Set up the database:
-   ```bash
-   # Create database
-   createdb ksp_crime_ai
-   
-   # Run migrations (if using Alembic)
-   # alembic upgrade head
-   
-   # For now, we'll use the mock database implementation
-   ```
+---
 
-4. Start the backend server:
-   ```bash
-   python main.py
-   ```
-   The API will be available at `http://localhost:8000`
+## Configuration (backend env)
 
-### Frontend Setup
+See `backend/.env.example`. Key variables:
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd ksp-crime-ai/frontend
-   ```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATABASE_URL` | SQLite | Switch to PostgreSQL in production |
+| `KSP_SECRET_KEY` | dev value | Token signing secret (change in prod) |
+| `KSP_AUTH_REQUIRED` | `true` | Set `false` for local demos |
+| `KSP_CORS_ORIGINS` | localhost:3000 | Allowed frontend origins |
+| `KSP_EXPOSE_SQL` | `false` | Expose generated SQL (debug only) |
 
-2. Install Node.js dependencies:
-   ```bash
-   npm install
-   ```
+Frontend: `REACT_APP_API_BASE` (default `http://localhost:8004`).
 
-3. Start the frontend development server:
-   ```bash
-   npm start
-   ```
-   The application will be available at `http://localhost:3000`
+---
 
-### Using the Application
+## API Overview
 
-1. Open your browser to `http://localhost:3000`
-2. Type or speak your query in the input field
-3. Examples to try:
-   - "Show crimes in Bengaluru last month"
-   - "How many thefts near MG Road yesterday?"
-   - "List all murder cases in 2023"
-4. Use the voice button (microphone icon) for speech input
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| POST | `/api/login` | — | Authenticate, returns token |
+| POST | `/api/chat` | ✓ | Conversational query (+ follow-ups, detail, summary) |
+| GET | `/api/stats` | ✓ | Dashboard analytics |
+| GET | `/api/network/*` | ✓ | Network/gang graphs + overview |
+| GET | `/api/hotspots`, `/api/patterns/mo` | ✓ | Hotspots & modus operandi |
+| GET | `/api/sociological` | ✓ | Demographic insights |
+| GET | `/api/offenders`, `/api/offenders/{id}` | ✓ | Risk-ranked profiles |
+| GET | `/api/cases/{fir}/summary`, `/similar` | ✓ | Decision support |
+| GET | `/api/financial/trails` | ✓ | Money-trail analysis |
+| GET | `/api/forecast` | ✓ | Forecast + early-warning alerts |
+| GET | `/api/audit` | admin | Audit log |
 
-## Project Structure
+---
 
-### Backend Modules
+## Testing
+```bash
+cd backend
+pytest -q          # 13 smoke tests: auth, queries, Kannada, RBAC, intelligence
+```
 
-- **models.py**: SQLAlchemy models for crimes, districts, crime_types, police_stations
-- **intent_classifier.py**: TF-IDF + LogisticRegression intent classifier
-- **translator.py**: Converts intents/entities to parameterized SQL
-- **chat.py**: FastAPI endpoint for /chat
-- **main.py**: Application entrypoint
+---
 
-### Frontend Components
+## Deployment (Zoho Catalyst)
 
-- **ChatPage.tsx**: Main chat interface
-- **MessageBubble**: Displays chat messages
-- **InputField**: Text input and send button
-- **VoiceButton**: Speech recognition button
+- **Web app + API + database** are hosted on **Zoho Catalyst** so police stations
+  access everything through a browser with nothing installed locally.
+- The **AI service (Ollama)** is decoupled — it runs on a GPU server (on-premise
+  in production for data sovereignty) and is called over HTTPS only for language
+  understanding. If it's unreachable, the platform falls back to the built-in
+  rule-based NLP, so it never goes down.
+- Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
+  `docker-compose.yml`) are provided for container-based hosting.
 
-## Design Principles
+---
 
-1. **Scope Narrowly**: Focused MVP without over-engineering
-2. **Anchor to Concrete Data**: Uses real schema and example queries
-3. **Specify Constraints Explicitly**: Addresses voice, language, data quality upfront
-4. **Iterate with Feedback**: Each phase builds on the previous
-5. **Keep Humans in the Loop**: Audit logging and manual review for security
+## Security & Privacy
+- Parameterized SQL throughout (injection-safe); the LLM never generates SQL.
+- PBKDF2-hashed passwords; HMAC-signed session tokens; role-based access.
+- Every query is written to a persisted audit log for accountability.
+- AI can run fully on-premise — sensitive crime data never leaves government
+  infrastructure.
 
-## Phased Development
+---
 
-This project follows the phased approach outlined in the documentation:
+## Roadmap
+- Wire the Ollama-based conversational layer (decoupled AI service) into chat.
+- Re-seed with planted, discoverable narrative patterns for richer analytics.
+- Upgrade the hotspot map to a geographic basemap (Leaflet) + heatmap.
+- Migrate to PostgreSQL and deploy on Zoho Catalyst for the live demo.
 
-- **Phase 0**: Foundation (schema, intents, API contract, wireframes)
-- **Phase 1**: Data Mapping & Models (SQLAlchemy models)
-- **Phase 2**: Basic NLP Pipeline (English intent classifier)
-- **Phase 3**: Query Engine (Intent → safe SQL translator)
-- **Phase 4**: API & Frontend (POST /chat endpoint + React chat interface)
-
-## Security Considerations
-
-- All database queries use parameterized statements to prevent SQL injection
-- Input validation rejects malformed requests
-- Audit logging tracks all queries for accountability
-- No external API dependencies (works offline)
-- Limited result sets (100 records max) to prevent resource exhaustion
-
-## Future Enhancements
-
-- Kannada language support
-- Entity extraction (locations, dates, crime types)
-- Advanced NLP (spaCy, transformer models)
-- User authentication and role-based access
-- Data export capabilities
-- Analytics dashboard
-- Mobile app version
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+---
 
 ## Acknowledgments
-
-- Built for Karnataka State Police (KSP)
-- Inspired by community policing initiatives
-- Created with Claude Code
+Built for Karnataka State Police. Synthetic data only — no real PII.
