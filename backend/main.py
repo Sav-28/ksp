@@ -37,8 +37,25 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    """Ensure all database tables (including audit_logs) exist, and warm up the LLM."""
+    """Ensure tables exist, auto-seed a fresh DB, and warm up the LLM."""
+    import logging
     create_tables()
+
+    # Auto-seed on a fresh/empty database (e.g. ephemeral cloud hosts that
+    # don't persist SQLite). Deterministic dataset; runs only when empty.
+    if os.getenv("KSP_AUTOSEED", "true").lower() != "false":
+        try:
+            from src.database.session import SessionLocal
+            from src.database.models import Crime
+            db = SessionLocal()
+            empty = db.query(Crime).count() == 0
+            db.close()
+            if empty:
+                logging.info("Empty database detected — seeding narrative dataset...")
+                import generate_narrative_data
+                generate_narrative_data.main()
+        except Exception as e:
+            logging.warning(f"Auto-seed skipped/failed: {e}")
 
     # Pre-load the Ollama model in the background so the first query is fast.
     if os.getenv("KSP_NLP_PROVIDER", "ollama").lower() == "ollama":
