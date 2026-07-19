@@ -41,7 +41,7 @@ For a detailed phase-by-phase changelog, see **[PROJECT_STATUS.md](PROJECT_STATU
 | Frontend | React 18 + TypeScript |
 | Auth | HMAC-signed tokens + PBKDF2 password hashing + role-based access |
 | Charts/Graph/Map | Hand-built SVG (no external chart/graph dependency) |
-| Deployment | Zoho Catalyst (web + API) + decoupled AI service; Docker provided |
+| Deployment | Zoho Catalyst **AppSail** — single origin serves the React build **and** the FastAPI API (no CORS); Docker provided |
 
 ---
 
@@ -86,16 +86,24 @@ filters, records examined, data source, interpretation).
 ```
         Browser (police stations — zero install)
                   │ HTTPS
-        ┌─────────▼──────────┐
-        │   ZOHO CATALYST    │   React web app + API functions + database
-        └─────────┬──────────┘
-                  │ HTTPS (natural-language understanding only)
+        ┌─────────▼─────────────────────────────┐
+        │        ZOHO CATALYST AppSail          │
+        │  FastAPI app (single origin)          │
+        │   • serves the React build (static)   │
+        │   • serves /api/... on the same host  │  ← no CORS / no gateway preflight
+        │   • SQLite (/tmp), auto-seeded         │
+        └─────────┬─────────────────────────────┘
+                  │ HTTPS (optional — language understanding only)
         ┌─────────▼──────────┐
         │   AI SERVICE       │   FastAPI + Ollama (qwen2.5:3b)
-        │  text → {intent,   │   runs on a GPU server in production;
-        │  entities} JSON    │   falls back to rule-based NLP if offline
+        │  text → {intent,   │   optional GPU server; if unreachable the app
+        │  entities} JSON    │   falls back to the built-in rule-based NLP
         └────────────────────┘
 ```
+
+The React production build is copied into `backend/static` and served by the same
+FastAPI app that exposes `/api/...`, so the browser makes same-origin calls — this
+avoids the Catalyst gateway intercepting CORS preflight (`OPTIONS`) requests.
 
 The LLM never touches the database — it only translates language into the
 existing **safe, parameterized query engine**, which executes deterministically.
@@ -206,16 +214,41 @@ pytest -q          # 13 smoke tests: auth, queries, Kannada, RBAC, intelligence
 
 ---
 
-## Deployment (Zoho Catalyst)
+## Deployment (Zoho Catalyst AppSail)
 
-- **Web app + API + database** are hosted on **Zoho Catalyst** so police stations
-  access everything through a browser with nothing installed locally.
-- The **AI service (Ollama)** is decoupled — it runs on a GPU server (on-premise
-  in production for data sovereignty) and is called over HTTPS only for language
-  understanding. If it's unreachable, the platform falls back to the built-in
+The whole platform runs as a **single Catalyst AppSail service** — the FastAPI app
+serves both the React build and the `/api/...` endpoints from one origin, so police
+stations access everything through a browser with nothing installed locally, and
+there are no CORS/preflight issues.
+
+### One-command deploy
+From the project root:
+```powershell
+./deploy.ps1
+```
+This (1) builds the React frontend, (2) copies the build into `backend/static`,
+(3) vendors Linux (`manylinux`) Python wheels into `backend/vendor` if missing,
+and (4) runs `catalyst deploy`. Live URL:
+`https://ksp-api-50044161264.development.catalystappsail.in`
+
+### Notes on AppSail
+- AppSail does **not** run `pip install` on the server, so Linux wheels are
+  **vendored** with the app (handled by `vendor-deps.ps1` / `deploy.ps1`).
+- `main.py` binds to Catalyst's `X_ZOHO_CATALYST_LISTEN_PORT` and **auto-seeds**
+  the DB on first boot; SQLite writes to `/tmp` (app dir is read-only).
+- In the cloud `KSP_NLP_PROVIDER=rules` is used (Ollama can't run on Catalyst);
+  the heavy ML stack (scikit-learn/numpy) is optional and a keyword classifier is
+  used instead.
+- The **AI service (Ollama)** is optional and decoupled — run it on a GPU server
+  (on-premise for data sovereignty); if unreachable the app falls back to
   rule-based NLP, so it never goes down.
-- Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
-  `docker-compose.yml`) are provided for container-based hosting.
+
+Full step-by-step guide (CLI setup, wheel vendoring, env vars, troubleshooting):
+see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+### Docker (alternative)
+Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
+`docker-compose.yml`) are provided for container/VM hosting.
 
 ---
 
@@ -232,7 +265,7 @@ pytest -q          # 13 smoke tests: auth, queries, Kannada, RBAC, intelligence
 - Wire the Ollama-based conversational layer (decoupled AI service) into chat.
 - Re-seed with planted, discoverable narrative patterns for richer analytics.
 - Upgrade the hotspot map to a geographic basemap (Leaflet) + heatmap.
-- Migrate to PostgreSQL and deploy on Zoho Catalyst for the live demo.
+- Migrate to PostgreSQL for the production database (currently SQLite on `/tmp`).
 
 ---
 
