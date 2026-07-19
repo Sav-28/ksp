@@ -49,6 +49,9 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+# .env.production holds only the public backend URL (no secrets) — must be
+# committed so Slate bakes it into the production build.
+!frontend/.env.production
 
 # Build outputs
 frontend/build/
