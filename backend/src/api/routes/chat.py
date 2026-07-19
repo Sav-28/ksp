@@ -5,6 +5,7 @@ from typing import Dict, Any
 import logging
 import traceback
 import os
+import re
 
 # Import real services
 from src.nlp.intent_classifier import nlp_service
@@ -378,6 +379,22 @@ async def chat_endpoint(
             nlp_output["entities"] = merge_context(
                 nlp_output.get("entities", {}), context, input_text
             )
+
+            # Location backfill guard: if the user mentioned a place ("in/at X")
+            # but no location was captured (e.g. a place outside Karnataka like
+            # "Hyderabad"), use the mentioned place as the filter so the query
+            # returns "no records" instead of dumping the entire database.
+            ents = nlp_output["entities"]
+            broad = any(w in input_text.lower() for w in
+                        ["all crimes", "everywhere", "entire state", "whole state",
+                         "across karnataka", "all records", "total"])
+            if not ents.get("location") and not broad:
+                m = re.search(r'\b(?:in|at|near|from)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)', input_text)
+                if m:
+                    cand = m.group(1).strip()
+                    stop = {"the", "last", "this", "each", "all", "recent", "every"}
+                    if cand.split()[0].lower() not in stop:
+                        ents["location"] = cand.title()
 
         # Handle out-of-scope queries gracefully (don't send to translator)
         if intent not in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:
