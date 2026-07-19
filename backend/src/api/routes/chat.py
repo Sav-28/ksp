@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 from typing import Dict, Any
 import logging
 import traceback
@@ -8,7 +8,7 @@ import os
 
 # Import real services
 from src.nlp.intent_classifier import nlp_service
-from src.nlp.followup import detect_detail_request, detect_case_action, extract_fir_number, merge_context
+from src.nlp.followup import detect_detail_request, detect_case_action, detect_person_query, extract_fir_number, merge_context
 from src.ai.language_provider import get_intent_and_entities as understand
 from src.query_engine.translator import QueryTranslator
 from src.database.session import get_db
@@ -84,6 +84,88 @@ def build_detail_answer(detail: Dict[str, Any], detail_type: str) -> str:
         )
     # full
     return f"Full details for {fir} ({detail['crime_type']} in {detail['district']}):"
+
+
+def build_person_response(db: Session, username: str, input_text: str,
+                          language: str, name: str, context: dict) -> Dict[str, Any]:
+    """
+    Look up a person by name and return their crime record (Area 1 retrieval).
+    Handles no-match, single-match, and ambiguous multi-match cases.
+    """
+    from src.database.models import Crime
+    from src.api.routes.insights import compute_risk
+
+    matches = db.query(Person).filter(Person.full_name.ilike(f"%{name}%")).all()
+
+    if not matches:
+        write_audit(db, username, input_text, language, "PERSON_QUERY", 1.0, None, 0)
+        return {"answer": f"No person named '{name}' was found in the records.",
+                "intent": "PERSON_QUERY", "confidence": 1.0, "entities": {"person_name": name},
+                "context": context, "sql": None, "results": [], "error": None}
+
+    # Accused-case count per matched person (to pick the actual criminal when
+    # there are namesakes, and to disambiguate).
+    match_ids = [p.id for p in matches]
+    case_counts = dict(
+        db.query(CasePerson.person_id, func.count(CasePerson.id))
+        .filter(CasePerson.person_id.in_(match_ids), CasePerson.role == "accused")
+        .group_by(CasePerson.person_id).all()
+    )
+
+    # Prefer exact (case-insensitive) name matches; otherwise all matches.
+    exact = [p for p in matches if p.full_name.lower() == name.lower()]
+    distinct_names = sorted({p.full_name for p in matches})
+
+    if not exact and len(distinct_names) > 1:
+        listed = ", ".join(distinct_names[:8])
+        write_audit(db, username, input_text, language, "PERSON_QUERY", 1.0, None, len(matches))
+        return {"answer": f"Found {len(distinct_names)} people matching '{name}': {listed}. "
+                          f"Please specify the full name.",
+                "intent": "PERSON_QUERY", "confidence": 1.0, "entities": {"person_name": name},
+                "context": context, "sql": None, "results": [], "error": None}
+
+    # Among candidates (exact if any, else all), pick the one with the most
+    # accused cases — that's the criminal of interest, not a coincidental namesake.
+    pool = exact if exact else matches
+    person = max(pool, key=lambda p: case_counts.get(p.id, 0))
+
+    # Fetch the person's accused crimes, newest first
+    crimes = (
+        db.query(Crime)
+        .join(CasePerson, CasePerson.crime_id == Crime.id)
+        .filter(CasePerson.person_id == person.id, CasePerson.role == "accused")
+        .order_by(Crime.date_occurred.desc())
+        .all()
+    )
+    results = [{
+        "id": c.id, "fir_number": c.fir_number, "crime_type": c.crime_type,
+        "district": c.district, "taluk": c.taluk, "police_station": c.police_station,
+        "date_occurred": str(c.date_occurred), "description": c.description,
+        "latitude": c.latitude, "longitude": c.longitude,
+    } for c in crimes]
+    enrich_results(db, results)
+
+    risk = compute_risk(db, person.id)
+    person.risk_score = risk["risk_score"]
+    db.commit()
+
+    if results:
+        answer = (f"{person.full_name} — {person.age}, {person.district}, {person.occupation}. "
+                  f"Accused in {len(results)} case(s). Risk score: {risk['risk_score']}/100 "
+                  f"({'High' if risk['risk_score'] >= 70 else 'Medium' if risk['risk_score'] >= 40 else 'Low'}).")
+    else:
+        answer = f"{person.full_name} has no recorded cases as an accused."
+
+    last_fir = results[0]["fir_number"] if results else context.get("last_fir")
+    write_audit(db, username, input_text, language, "PERSON_QUERY", 1.0, None, len(results))
+    return {
+        "answer": answer, "intent": "PERSON_QUERY", "confidence": 1.0,
+        "entities": {"person_name": person.full_name, "person_id": person.id,
+                     "risk_score": risk["risk_score"]},
+        "results": results,
+        "context": {"last_fir": last_fir, "entities": context.get("entities", {})},
+        "sql": None, "error": None,
+    }
 
 
 def write_audit(db: Session, username: str, query_text: str, language: str,
@@ -211,9 +293,28 @@ async def chat_endpoint(
                 "error": None,
             }
 
+        # ---- Person-by-name query via regex (Area 1) ----
+        # Catch "crimes done by X" / "record of X" before the LLM, so it's fast
+        # and provider-independent. Guarded against districts/crime-types.
+        early_person = detect_person_query(input_text)
+        if early_person:
+            return build_person_response(db, username, input_text, language, early_person, context)
+
         # Call NLP service to get intent/entities (LLM-backed, with rule fallback)
         nlp_output = understand(input_text, language=language)
         intent = nlp_output.get("intent")
+        entities_out = nlp_output.get("entities") or {}
+
+        # ---- Person-by-name query via the LLM intent (Area 1) ----
+        person_name = entities_out.get("person_name")
+        if intent == "PERSON_QUERY" or person_name:
+            if person_name:
+                return build_person_response(db, username, input_text, language, person_name, context)
+            return {
+                "answer": "Which person are you asking about? Please mention their name.",
+                "intent": "PERSON_QUERY", "confidence": 1.0, "entities": {},
+                "context": context, "sql": None, "results": [], "error": None,
+            }
 
         # Carry forward entities from the previous turn for follow-up queries
         if intent in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:

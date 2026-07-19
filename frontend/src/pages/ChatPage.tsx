@@ -990,12 +990,13 @@ const ChatPage: React.FC = () => {
           evidence: data.evidence
         }]);
       } else {
-        // SHOW / COUNT / UNKNOWN — render answer plus crime case cards
+        // SHOW / COUNT / PERSON_QUERY / UNKNOWN — render answer plus crime case cards
         const results = data.results || [];
+        const useServerAnswer = data.intent === 'PERSON_QUERY' || currentLanguage !== 'kn';
         setMessages(prev => [...prev, {
-          text: currentLanguage === 'kn'
-            ? buildAnswer('kn', data.intent, data.entities || {}, results.length)
-            : data.answer,
+          text: useServerAnswer
+            ? data.answer
+            : buildAnswer('kn', data.intent, data.entities || {}, results.length),
           isUser: false,
           intent: data.intent,
           entities: data.entities,

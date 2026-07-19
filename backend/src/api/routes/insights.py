@@ -146,11 +146,18 @@ def compute_risk(db: Session, person_id: int) -> Dict[str, Any]:
 
 @router.get("/offenders")
 async def list_offenders(
-    limit: int = 20,
+    limit: int = 500,
+    search: str = None,
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Ranked list of repeat offenders by computed risk score (bulk-optimized)."""
+    """
+    Offenders ranked by computed risk score (bulk-optimized).
+
+    - Default: all repeat offenders (accused in 2+ cases), ranked by risk.
+    - With ?search=<name>: any accused person matching the name (even 1 case),
+      so investigators can look up a specific criminal.
+    """
     # Pull all accused links joined with their crimes in ONE query.
     rows = (
         db.query(
@@ -176,18 +183,28 @@ async def list_offenders(
         if dt:
             a["latest_year"] = max(a["latest_year"], dt.year)
 
-    # Repeat offenders only (2+ accused cases).
-    repeat_ids = [pid for pid, a in agg.items() if a["count"] >= 2]
-    if not repeat_ids:
+    if search and search.strip():
+        # Search mode: any accused person whose name matches (>=1 case).
+        term = f"%{search.strip()}%"
+        matched_ids = {
+            p.id for p in db.query(Person.id).filter(Person.full_name.ilike(term)).all()
+        }
+        target_ids = [pid for pid in agg.keys() if pid in matched_ids]
+    else:
+        # Default: repeat offenders (2+ accused cases).
+        target_ids = [pid for pid, a in agg.items() if a["count"] >= 2]
+
+    if not target_ids:
         return {"total_repeat_offenders": 0, "offenders": []}
 
     # Gang members in one query.
     gang_ids = {
         gm.person_id for gm in db.query(GangMember.person_id)
-        .filter(GangMember.person_id.in_(repeat_ids)).all()
+        .filter(GangMember.person_id.in_(target_ids)).all()
     }
     # Person records in one query.
-    persons = {p.id: p for p in db.query(Person).filter(Person.id.in_(repeat_ids)).all()}
+    persons = {p.id: p for p in db.query(Person).filter(Person.id.in_(target_ids)).all()}
+    repeat_ids = target_ids
 
     current_year = date.today().year
     offenders = []

@@ -129,6 +129,11 @@ Upgrades Area 1 from keyword-matching to genuine conversational AI.
 - **Explainability**: the evidence panel now shows which engine understood the query ("ollama:qwen2.5:3b").
 - **Verified** on unrehearsed queries: "which areas are seeing the most chain snatching lately?" → breakdown by district + Snatching filter; "give me a rundown of murder cases in mysuru" → SHOW; Kannada queries mapped to canonical English entities. Pytest pinned to the rule engine for determinism.
 
+### ✅ Betterment B3 — Person Lookup & Profile Search (DONE)
+Deepens Areas 1 & 5.
+- **Person-by-name chat queries**: "all crimes done by Vikram Reddy" / "show me X's record" → PERSON_QUERY returns the person's summary (age, district, cases, risk level) plus their crimes as cards. Detected via the LLM intent AND a guarded regex fallback (works even without the LLM). Namesakes are disambiguated by picking the person with the most accused cases.
+- **PROFILES search + full list**: the offenders list is no longer capped at 20 — it shows all repeat offenders, with a live search box that finds ANY accused criminal by name (`/api/offenders?search=`), scrollable.
+
 ### ✅ Betterment B2 — Larger Narrative Dataset (DONE)
 Scaled the database and planted discoverable stories so analytics and the AI have real signal.
 - **`generate_narrative_data.py`**: ~920 crimes (was 154), 1,500 persons, 2,650+ case links, 6 gangs, 530 accounts, 1,080+ transactions — same schema, no code/feature changes.

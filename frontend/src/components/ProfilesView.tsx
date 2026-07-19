@@ -36,11 +36,13 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
-  const load = async () => {
+  const load = async (searchTerm = '') => {
     setLoading(true); setError(null);
     try {
-      const res = await apiFetch('/api/offenders?limit=20');
+      const q = searchTerm.trim() ? `?search=${encodeURIComponent(searchTerm.trim())}` : '?limit=500';
+      const res = await apiFetch(`/api/offenders${q}`);
       const data = await res.json();
       setOffenders(data.offenders || []);
     } catch (e: any) {
@@ -49,6 +51,13 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
   };
   useEffect(() => { load(); }, []);
 
+  // Debounced search
+  useEffect(() => {
+    const id = setTimeout(() => { load(search); }, 400);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search]);
+
   const openProfile = async (id: number) => {
     try {
       const res = await apiFetch(`/api/offenders/${id}`);
@@ -56,8 +65,11 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
     } catch { /* ignore */ }
   };
 
-  if (loading) return <div style={{ padding: 60, textAlign: 'center', color: '#666' }}>⏳ {t('Computing risk scores...', 'ಅಪಾಯ ಸ್ಕೋರ್ ಲೆಕ್ಕಾಚಾರ...')}</div>;
   if (error) return <div style={{ padding: 40, textAlign: 'center', color: '#d32f2f' }}>⚠️ {error}</div>;
+
+  const listTitle = search.trim()
+    ? t('Search Results', 'ಹುಡುಕಾಟ ಫಲಿತಾಂಶಗಳು')
+    : t('High-Risk Repeat Offenders', 'ಹೆಚ್ಚು-ಅಪಾಯದ ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿಗಳು');
 
   return (
     <div style={{ padding: '30px 40px', backgroundColor: '#fafafa', minHeight: '100%' }}>
@@ -65,28 +77,51 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
         🎯 {t('Offender Profiling & Risk Scoring', 'ಅಪರಾಧಿ ವಿಶ್ಲೇಷಣೆ ಮತ್ತು ಅಪಾಯ ಸ್ಕೋರ್')}
       </h2>
       <p style={{ color: '#666', fontSize: 14, marginBottom: 20 }}>
-        {t('Repeat offenders ranked by criminological risk score', 'ಅಪರಾಧಶಾಸ್ತ್ರೀಯ ಅಪಾಯ ಸ್ಕೋರ್ ಪ್ರಕಾರ ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿಗಳು')}
+        {t('Search any criminal by name, or browse repeat offenders ranked by risk',
+           'ಹೆಸರಿನಿಂದ ಯಾವುದೇ ಅಪರಾಧಿಯನ್ನು ಹುಡುಕಿ, ಅಥವಾ ಅಪಾಯದ ಪ್ರಕಾರ ಬ್ರೌಸ್ ಮಾಡಿ')}
       </p>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {/* List */}
         <div style={{ flex: '1 1 360px', minWidth: 340 }}>
           <div style={card}>
-            <div style={cardTitle}>🚩 {t('High-Risk Repeat Offenders', 'ಹೆಚ್ಚು-ಅಪಾಯದ ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿಗಳು')} ({offenders.length})</div>
-            {offenders.map((o, i) => (
-              <div key={o.person_id} onClick={() => openProfile(o.person_id)}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px', borderRadius: 6, cursor: 'pointer', borderBottom: '1px solid #f0f0f0', background: profile?.person_id === o.person_id ? '#e8eaf6' : 'transparent' }}>
-                <div style={{ width: 22, fontWeight: 700, color: '#888' }}>{i + 1}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600 }}>👤 {o.name} {o.gang_member && <span title="Gang member">🏴</span>}</div>
-                  <div style={{ fontSize: 12, color: '#666' }}>{localizeDistrict(o.district, language)} · {o.cases} {t('cases', 'ಪ್ರಕರಣ')}</div>
+            {/* Search box */}
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t('🔍 Search criminal by name...', '🔍 ಹೆಸರಿನಿಂದ ಅಪರಾಧಿಯನ್ನು ಹುಡುಕಿ...')}
+              style={{
+                width: '100%', boxSizing: 'border-box', padding: '10px 14px',
+                border: '2px solid #e0e0e0', borderRadius: 6, fontSize: 14,
+                outline: 'none', marginBottom: 14, fontFamily: 'inherit',
+              }}
+            />
+            <div style={cardTitle}>🚩 {listTitle} ({offenders.length})</div>
+            <div style={{ maxHeight: 460, overflowY: 'auto' }}>
+              {loading ? (
+                <div style={{ padding: 30, textAlign: 'center', color: '#888', fontSize: 13 }}>
+                  ⏳ {t('Loading...', 'ಲೋಡ್ ಆಗುತ್ತಿದೆ...')}
                 </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: o.risk_score >= 70 ? '#c62828' : o.risk_score >= 40 ? '#ef6c00' : '#2e7d32' }}>{o.risk_score}</div>
-                  <div style={{ fontSize: 10, color: '#999' }}>{t('risk', 'ಅಪಾಯ')}</div>
+              ) : offenders.length === 0 ? (
+                <div style={{ padding: 30, textAlign: 'center', color: '#999', fontSize: 13 }}>
+                  {t('No matching criminals found.', 'ಯಾವುದೇ ಅಪರಾಧಿ ಸಿಗಲಿಲ್ಲ.')}
                 </div>
-              </div>
-            ))}
+              ) : offenders.map((o, i) => (
+                <div key={o.person_id} onClick={() => openProfile(o.person_id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px', borderRadius: 6, cursor: 'pointer', borderBottom: '1px solid #f0f0f0', background: profile?.person_id === o.person_id ? '#e8eaf6' : 'transparent' }}>
+                  <div style={{ width: 22, fontWeight: 700, color: '#888' }}>{i + 1}</div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600 }}>👤 {o.name} {o.gang_member && <span title="Gang member">🏴</span>}</div>
+                    <div style={{ fontSize: 12, color: '#666' }}>{localizeDistrict(o.district, language)} · {o.cases} {t('cases', 'ಪ್ರಕರಣ')}</div>
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: o.risk_score >= 70 ? '#c62828' : o.risk_score >= 40 ? '#ef6c00' : '#2e7d32' }}>{o.risk_score}</div>
+                    <div style={{ fontSize: 10, color: '#999' }}>{t('risk', 'ಅಪಾಯ')}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 

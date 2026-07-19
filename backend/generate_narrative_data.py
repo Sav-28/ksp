@@ -40,13 +40,17 @@ DISTRICTS = [
     "Mangaluru", "Hubli", "Dharwad", "Tumakuru", "Raichur",
 ]
 
+# District centroids nudged firmly onto land (coastal ones shifted inland/east)
 DISTRICT_COORDS = {
-    "Bengaluru Urban": (12.9716, 77.5946), "Bengaluru Rural": (13.2299, 77.5750),
-    "Mysuru": (12.2958, 76.6394), "Belagavi": (15.8497, 74.4977),
-    "Kalaburagi": (17.3297, 76.8343), "Mangaluru": (12.9141, 74.8560),
+    "Bengaluru Urban": (12.9716, 77.5946), "Bengaluru Rural": (13.2846, 77.5750),
+    "Mysuru": (12.2958, 76.6394), "Belagavi": (15.8497, 74.5060),
+    "Kalaburagi": (17.3297, 76.8343), "Mangaluru": (12.8700, 74.9200),
     "Hubli": (15.3647, 75.1240), "Dharwad": (15.4589, 75.0078),
     "Tumakuru": (13.3409, 77.1010), "Raichur": (16.2076, 77.3463),
 }
+
+# Minimum longitude per district to keep points off the sea (coastal guard)
+_MIN_LNG = {"Mangaluru": 74.87, "Belagavi": 74.45}
 
 POLICE_STATIONS = {
     "Bengaluru Urban": ["Koramangala", "Indiranagar", "Jayanagar", "Whitefield", "MG Road", "Yelahanka"],
@@ -128,7 +132,14 @@ def mask_account():
 
 def coords_for(district):
     base = DISTRICT_COORDS.get(district, (13.0, 76.0))
-    return round(base[0] + random.uniform(-0.12, 0.12), 4), round(base[1] + random.uniform(-0.12, 0.12), 4)
+    # Tighter spread (~6 km) so points stay within the district and on land.
+    lat = base[0] + random.uniform(-0.06, 0.06)
+    lng = base[1] + random.uniform(-0.06, 0.06)
+    # Coastal guard: don't let points drift west into the Arabian Sea.
+    min_lng = _MIN_LNG.get(district)
+    if min_lng is not None and lng < min_lng:
+        lng = min_lng + random.uniform(0.0, 0.03)
+    return round(lat, 4), round(lng, 4)
 
 
 # Sequential FIR numbering
