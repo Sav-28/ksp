@@ -152,19 +152,30 @@ const GovHeader = ({
 
   return (
     <>
-      {/* Top bar with language and accessibility */}
+      {/* Tricolor accent strip */}
+      <div style={{ display: 'flex', height: '4px' }}>
+        <div style={{ flex: 1, background: '#ff9933' }} />
+        <div style={{ flex: 1, background: '#ffffff' }} />
+        <div style={{ flex: 1, background: '#138808' }} />
+      </div>
+
+      {/* Top utility bar */}
       <div style={{
-        backgroundColor: '#1a237e',
+        background: '#15208a',
         color: 'white',
-        padding: '8px 20px',
-        fontSize: '13px',
+        padding: '7px 24px',
+        fontSize: '12.5px',
         display: 'flex',
         justifyContent: 'space-between',
-        alignItems: 'center'
+        alignItems: 'center',
+        borderBottom: '1px solid rgba(255,255,255,0.08)'
       }}>
-        <div>
-          <span style={{ marginRight: '15px' }}>📧 support@ksp.gov.in</span>
-          <span>📞 100 (Emergency) | 1091 (Women Helpline)</span>
+        <div style={{ display: 'flex', gap: '14px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span>📧 support@ksp.gov.in</span>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <span>📞 100 · {currentLanguage === 'en' ? 'Emergency' : 'ತುರ್ತು'}</span>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <span>👩 1091 · {currentLanguage === 'en' ? 'Women Helpline' : 'ಮಹಿಳಾ ಸಹಾಯವಾಣಿ'}</span>
         </div>
         <div>
           <button 
@@ -242,62 +253,68 @@ const GovHeader = ({
 
       {/* Main header with emblem */}
       <div style={{
-        backgroundColor: '#ffffff',
-        padding: '15px 20px',
-        borderBottom: '3px solid #ff9800',
+        background: 'linear-gradient(180deg,#ffffff 0%,#f7f8fc 100%)',
+        padding: '16px 24px',
+        borderBottom: '3px solid #ff9933',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        boxShadow: '0 2px 6px rgba(0,0,0,0.08)'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {/* Emblem — double-ring official badge */}
           <div style={{
-            width: '60px',
-            height: '60px',
-            backgroundColor: '#1a237e',
-            borderRadius: '50%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'white',
-            fontWeight: 'bold',
-            fontSize: '24px',
-            cursor: 'pointer'
+            width: '62px', height: '62px', borderRadius: '50%',
+            background: 'radial-gradient(circle at 50% 35%, #283593, #1a237e)',
+            border: '2px solid #ffb300',
+            boxShadow: '0 0 0 3px #ffffff, 0 2px 6px rgba(0,0,0,0.2)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#ffd54f', fontWeight: 'bold', fontSize: '13px', textAlign: 'center',
+            lineHeight: 1.05, cursor: 'pointer', flexShrink: 0
           }}
-          onClick={() => window.location.reload()}
-          title="Refresh"
+          onClick={() => onNavigate('chat')}
+          title={currentLanguage === 'en' ? 'Home' : 'ಮುಖಪುಟ'}
           >
-            ಕರ್
+            KSP
           </div>
           <div>
-            <div style={{ fontSize: '22px', fontWeight: 'bold', color: '#1a237e', lineHeight: '1.2' }}>
+            <div style={{ fontSize: '21px', fontWeight: 800, color: '#1a237e', lineHeight: '1.15', letterSpacing: '0.3px' }}>
               {currentLanguage === 'en' ? 'GOVERNMENT OF KARNATAKA' : 'ಕರ್ನಾಟಕ ಸರ್ಕಾರ'}
             </div>
-            <div style={{ fontSize: '16px', color: '#666', marginTop: '3px' }}>
-              {currentLanguage === 'en' 
-                ? 'Karnataka State Police - Crime Database AI Assistant'
-                : 'ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್ - ಅಪರಾಧ ಡೇಟಾಬೇಸ್ AI ಸಹಾಯಕ'}
+            <div style={{ fontSize: '14.5px', color: '#455a64', marginTop: '3px', fontWeight: 500 }}>
+              {currentLanguage === 'en'
+                ? 'Karnataka State Police · Crime Intelligence Platform'
+                : 'ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್ · ಅಪರಾಧ ಗುಪ್ತಚರ ವೇದಿಕೆ'}
             </div>
           </div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '14px', color: '#666' }}>
-            {currentLanguage === 'en' ? 'Secured Portal' : 'ಸುರಕ್ಷಿತ ಪೋರ್ಟಲ್'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '7px',
+            background: '#e8f5e9', color: '#2e7d32', border: '1px solid #c8e6c9',
+            padding: '6px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 700
+          }}>
+            🔒 {currentLanguage === 'en' ? 'Secured Portal' : 'ಸುರಕ್ಷಿತ ಪೋರ್ಟಲ್'}
           </div>
-          <div style={{ fontSize: '12px', color: '#999', marginTop: '2px' }}>
-            {currentLanguage === 'en' ? 'Last Updated: ' : 'ಕೊನೆಯ ನವೀಕರಣ: '}
-            {new Date().toLocaleDateString()}
+          <div style={{ textAlign: 'right', display: window.innerWidth < 640 ? 'none' : 'block' }}>
+            <div style={{ fontSize: '11px', color: '#90a4ae', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              {currentLanguage === 'en' ? 'Last Updated' : 'ಕೊನೆಯ ನವೀಕರಣ'}
+            </div>
+            <div style={{ fontSize: '13px', color: '#546e7a', fontWeight: 600 }}>
+              {new Date().toLocaleDateString('en-GB')}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Navigation menu */}
       <div style={{
-        backgroundColor: '#283593',
-        padding: '0 20px',
+        background: 'linear-gradient(180deg,#283593 0%,#1a237e 100%)',
+        padding: '0 12px',
         display: 'flex',
         gap: '0',
-        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        flexWrap: 'wrap',
+        boxShadow: '0 2px 6px rgba(0,0,0,0.15)'
       }}>
         {(currentLanguage === 'en' 
           ? ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'RECORDS', ...(user?.role === 'admin' ? ['AUDIT'] : [])]
@@ -321,17 +338,19 @@ const GovHeader = ({
               key={idx}
               onClick={() => handleMenuClick(englishItem)}
               style={{
-                padding: '12px 20px',
-                color: 'white',
+                padding: '13px 16px',
+                color: isActive ? '#fff' : 'rgba(255,255,255,0.82)',
                 cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '500',
-                borderRight: idx < 7 ? '1px solid rgba(255,255,255,0.1)' : 'none',
-                transition: 'background 0.2s',
-                backgroundColor: isActive ? '#1a237e' : 'transparent'
+                fontSize: '13px',
+                fontWeight: isActive ? 700 : 500,
+                letterSpacing: '0.3px',
+                transition: 'all 0.15s',
+                backgroundColor: isActive ? 'rgba(255,255,255,0.10)' : 'transparent',
+                borderBottom: isActive ? '3px solid #ff9933' : '3px solid transparent',
+                whiteSpace: 'nowrap'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#1a237e'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = isActive ? '#1a237e' : 'transparent'}
+              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'; }}
+              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.backgroundColor = 'transparent'; }}
             >
               {item}
             </div>
@@ -1207,15 +1226,15 @@ const ChatPage: React.FC = () => {
 
       {/* Breadcrumb */}
       <div style={{
-        backgroundColor: '#f5f5f5',
-        padding: '10px 20px',
-        fontSize: '13px',
-        color: '#666',
-        borderBottom: '1px solid #e0e0e0'
+        background: '#eef1f8',
+        padding: '9px 24px',
+        fontSize: '12.5px',
+        color: '#5a6b8c',
+        borderBottom: '1px solid #dce1ee'
       }}>
-        🏠 {currentLanguage === 'en' ? 'Home' : 'ಮುಖಪುಟ'} &gt; 
-        {currentLanguage === 'en' ? ' Services' : ' ಸೇವೆಗಳು'} &gt; 
-        {currentLanguage === 'en' ? ' Crime Database' : ' ಅಪರಾಧ ಡೇಟಾಬೇಸ್'} &gt; 
+        🏠 {currentLanguage === 'en' ? 'Home' : 'ಮುಖಪುಟ'} <span style={{ color: '#b0bec5' }}>›</span>
+        {currentLanguage === 'en' ? ' Services' : ' ಸೇವೆಗಳು'} <span style={{ color: '#b0bec5' }}>›</span>
+        {currentLanguage === 'en' ? ' Crime Database' : ' ಅಪರಾಧ ಡೇಟಾಬೇಸ್'} <span style={{ color: '#b0bec5' }}>›</span>
         <span style={{ color: '#1976d2', fontWeight: '600' }}>
           {currentView === 'dashboard'
             ? (currentLanguage === 'en' ? ' Dashboard' : ' ಡ್ಯಾಶ್‌ಬೋರ್ಡ್')
@@ -1365,16 +1384,33 @@ const ChatPage: React.FC = () => {
 
       {/* Footer */}
       <div style={{
-        backgroundColor: '#1a237e',
+        background: 'linear-gradient(180deg,#1a237e 0%,#151d6e 100%)',
         color: 'white',
-        padding: '12px 20px',
+        padding: '10px 24px',
         fontSize: '12px',
-        textAlign: 'center',
-        borderTop: '3px solid #ff9800'
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: '8px',
+        borderTop: '3px solid #ff9933'
       }}>
-        {currentLanguage === 'en'
-          ? '© 2024 Government of Karnataka | Karnataka State Police | All Rights Reserved | Powered by AI Technology'
-          : '© 2024 ಕರ್ನಾಟಕ ಸರ್ಕಾರ | ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್ | ಎಲ್ಲಾ ಹಕ್ಕುಗಳನ್ನು ಕಾಯ್ದಿರಿಸಲಾಗಿದೆ | AI ತಂತ್ರಜ್ಞಾನದಿಂದ ಚಾಲಿತ'}
+        <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
+          <span style={{
+            width: '22px', height: '22px', borderRadius: '50%', background: '#ffb300',
+            color: '#1a237e', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '10px', fontWeight: 800
+          }}>KSP</span>
+          {currentLanguage === 'en' ? 'Karnataka State Police' : 'ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್'}
+        </span>
+        <span style={{ color: 'rgba(255,255,255,0.75)' }}>
+          {currentLanguage === 'en'
+            ? '© 2024 Government of Karnataka · All Rights Reserved'
+            : '© 2024 ಕರ್ನಾಟಕ ಸರ್ಕಾರ · ಎಲ್ಲಾ ಹಕ್ಕುಗಳನ್ನು ಕಾಯ್ದಿರಿಸಲಾಗಿದೆ'}
+        </span>
+        <span style={{ color: 'rgba(255,255,255,0.65)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          🔒 {currentLanguage === 'en' ? 'Confidential · Authorized use only' : 'ಗೌಪ್ಯ · ಅಧಿಕೃತ ಬಳಕೆ ಮಾತ್ರ'}
+        </span>
       </div>
     </div>
   );
