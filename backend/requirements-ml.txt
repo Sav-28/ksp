@@ -1,0 +1,14 @@
+# Optional ML dependencies for LOCAL development / training.
+#   pip install -r requirements.txt -r requirements-ml.txt
+#
+# With these installed, the intent classifier uses the trained scikit-learn
+# model (best English accuracy). Without them, the backend transparently falls
+# back to a fast keyword-based classifier — so these are NOT required to run or
+# deploy the API. They are intentionally excluded from the cloud build because
+# scikit-learn/scipy/numpy are heavy platform-specific binary wheels.
+scikit-learn>=1.3,<2
+joblib>=1.3
+numpy>=1.26,<3
+
+# Migrations tooling (not needed at runtime; create_tables() builds the schema).
+alembic==1.13.1

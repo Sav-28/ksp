@@ -41,11 +41,13 @@ def on_startup():
     import logging
     create_tables()
 
-    # Ensure the NLP model is usable even if the shipped model can't be loaded
-    # (e.g. a scikit-learn/numpy version mismatch on the host) — retrain in memory.
+    # Ensure the NLP model is usable. If scikit-learn is installed but the shipped
+    # model couldn't be loaded (e.g. a version mismatch), retrain it in memory.
+    # If scikit-learn isn't installed at all (e.g. the slim cloud build), the
+    # classifier transparently uses a keyword-based fallback — nothing to do.
     try:
-        from src.nlp.intent_classifier import nlp_service
-        if not nlp_service.is_trained:
+        from src.nlp.intent_classifier import nlp_service, SKLEARN_AVAILABLE
+        if SKLEARN_AVAILABLE and not nlp_service.is_trained:
             logging.info("NLP model not loaded — training in memory...")
             from src.nlp.train_model import create_training_data
             X, y = create_training_data()
@@ -53,6 +55,8 @@ def on_startup():
                 nlp_service.train(X, y)  # fits; save may fail on read-only FS (fine)
             except Exception:
                 pass  # in-memory model is already fitted
+        elif not SKLEARN_AVAILABLE:
+            logging.info("scikit-learn not installed — using keyword intent classifier.")
     except Exception as e:
         logging.warning(f"NLP init warning: {e}")
 

@@ -1,12 +1,23 @@
 import re
 import json
-import joblib
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
 from typing import Dict, Any, Tuple
 import os
 import calendar
 from datetime import datetime, timedelta
+
+# scikit-learn / joblib are OPTIONAL. The ML intent model gives the best English
+# accuracy, but it's a heavy binary dependency (scikit-learn + scipy + numpy)
+# that is awkward to install on some hosts (e.g. Zoho Catalyst AppSail, where
+# platform-specific wheels can't be vendored cross-platform). When they're not
+# available we transparently fall back to a fast keyword-based classifier, so
+# the API stays fully functional. The LLM (Ollama) path is unaffected.
+try:
+    import joblib
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    SKLEARN_AVAILABLE = True
+except Exception:  # ImportError or any load-time error
+    SKLEARN_AVAILABLE = False
 
 class IntentClassifier:
     def __init__(self, model_path: str = "models/intent_en.joblib"):
@@ -17,21 +28,26 @@ class IntentClassifier:
             model_path: Path to the saved model file
         """
         self.model_path = model_path
-        self.vectorizer = TfidfVectorizer(
-            lowercase=True,
-            stop_words=None,  # Keep words like "how", "count", "by" — they carry intent signal
-            ngram_range=(1, 2),
-            max_features=5000
-        )
-        self.classifier = LogisticRegression(
-            random_state=42,
-            max_iter=1000,
-            C=10.0  # Less regularization for small dataset to sharpen decision boundaries
-        )
+        if SKLEARN_AVAILABLE:
+            self.vectorizer = TfidfVectorizer(
+                lowercase=True,
+                stop_words=None,  # Keep words like "how", "count", "by" — they carry intent signal
+                ngram_range=(1, 2),
+                max_features=5000
+            )
+            self.classifier = LogisticRegression(
+                random_state=42,
+                max_iter=1000,
+                C=10.0  # Less regularization for small dataset to sharpen decision boundaries
+            )
+        else:
+            self.vectorizer = None
+            self.classifier = None
         self.is_trained = False
 
-        # Try to load existing model
-        self._load_model()
+        # Try to load existing model (only meaningful when scikit-learn is present)
+        if SKLEARN_AVAILABLE:
+            self._load_model()
 
         # Known cities in Karnataka for location extraction
         self.karnataka_cities = [
@@ -78,6 +94,11 @@ class IntentClassifier:
             X: List of text samples
             y: List of intent labels
         """
+        if not SKLEARN_AVAILABLE:
+            # No ML backend — the keyword classifier needs no training.
+            self.is_trained = False
+            return
+
         # Vectorize the text
         X_vec = self.vectorizer.fit_transform(X)
 
@@ -103,7 +124,9 @@ class IntentClassifier:
             Tuple of (intent, confidence)
         """
         if not self.is_trained:
-            return "UNKNOWN", 0.0
+            # No trained ML model (e.g. scikit-learn not installed) — use the
+            # deterministic keyword classifier instead.
+            return self._keyword_predict(text)
 
         # Preprocess text (language-aware preprocessing could be added here)
         text_clean = self._preprocess_text(text)
@@ -116,6 +139,65 @@ class IntentClassifier:
         confidence = max(self.classifier.predict_proba(text_vec)[0])
 
         return intent, float(confidence)
+
+    def _keyword_predict(self, text: str) -> Tuple[str, float]:
+        """
+        Fast, dependency-free intent classifier used when the scikit-learn model
+        isn't available. Rule/keyword based — covers the same intents the ML
+        model does: SHOW_CRIMES, COUNT_CRIMES, BREAKDOWN_CRIMES, UNKNOWN.
+        (PERSON_QUERY / BRIEFING / FIR detail are handled separately by regex
+        in followup.py before this is ever reached.)
+        """
+        t = self._preprocess_text(text)
+
+        # Out-of-scope chit-chat / greetings -> UNKNOWN
+        chitchat = [
+            "hello", "hi ", "hey", "how are you", "good morning", "good night",
+            "good evening", "thanks", "thank you", "joke", "weather", "who are you",
+            "your name", "sing", "dance", "movie", "restaurant", "cricket",
+            "capital of", "play music", "book a cab", "order food", "time is it",
+        ]
+        if any(c in t for c in chitchat) and not any(
+            k in t for k in ["crime", "theft", "murder", "robber", "fir", "case"]
+        ):
+            return "UNKNOWN", 0.2
+
+        crime_signal = any(w in t for w in [
+            "crime", "crimes", "theft", "thefts", "murder", "murders", "robbery",
+            "robberies", "snatch", "burglary", "burglaries", "assault", "riot",
+            "cheating", "forgery", "counterfeit", "case", "cases", "fir", "record",
+            "records", "incident", "offence", "offense",
+        ])
+
+        # BREAKDOWN: aggregation / grouping / ranking signals
+        breakdown_signal = (
+            self._extract_group_by(t) is not None
+            or any(w in t for w in [
+                "breakdown", "break down", "distribution", "trend", "grouped",
+                "group by", "compare", "comparison", "statistics", "stats",
+                "top crime", "most common", "which district", "which area",
+                "which city", "per district", "per type",
+            ])
+        )
+        if breakdown_signal and crime_signal:
+            return "BREAKDOWN_CRIMES", 0.75
+
+        # COUNT: "how many", "count", "number of", "total"
+        count_signal = any(w in t for w in [
+            "how many", "count", "number of", "total", "no of", "no. of",
+        ])
+        if count_signal and crime_signal:
+            return "COUNT_CRIMES", 0.75
+
+        # SHOW: list/display/show/find/give + crime signal (or a bare crime word)
+        show_signal = any(w in t for w in [
+            "show", "list", "display", "give me", "find", "pull up", "see",
+            "view", "fetch", "get", "what crimes", "i want", "details",
+        ])
+        if (show_signal and crime_signal) or crime_signal:
+            return "SHOW_CRIMES", 0.7
+
+        return "UNKNOWN", 0.2
 
     def get_intent_and_entities(self, text: str, language: str = "en") -> Dict[str, Any]:
         """
