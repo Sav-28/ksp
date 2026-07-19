@@ -34,23 +34,45 @@ Slate hosts the React front-end and rebuilds automatically on every push to GitH
 
 ---
 
-## Backend (needed for a fully working live site)
+## Backend → Zoho Catalyst **AppSail** (required — deploy must be on Catalyst)
 
-Slate is front-end only, so the FastAPI backend must run elsewhere. Fastest options:
+AppSail is Catalyst's PaaS that runs a full web app with a start command. It runs
+our FastAPI/uvicorn backend almost as-is.
 
-### Option: Render (free tier, Python-friendly)
-1. Create a new **Web Service** from the same GitHub repo, root dir `backend`.
-2. Build: `pip install -r requirements.txt`
-3. Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. Add a **PostgreSQL** instance; set `DATABASE_URL` (the ORM is DB-agnostic).
-5. Set env: `KSP_SECRET_KEY`, `KSP_CORS_ORIGINS=https://<your-slate-url>`,
-   `KSP_NLP_PROVIDER=rules` (Ollama can't run on a small host), etc.
-6. First deploy: run the seed + train scripts once (shell), then it's live.
-7. Put the resulting URL into Slate's `REACT_APP_API_BASE`.
+### Prep already done in the code
+- `main.py` binds to Catalyst's port env var `X_ZOHO_CATALYST_LISTEN_PORT`.
+- On startup the app **auto-seeds** the DB and **retrains** the NLP model in memory
+  if the shipped model can't load (library version differences).
+- `KSP_NLP_PROVIDER=rules` is used in the cloud (Ollama can't run on Catalyst).
 
-> Note: SQLite doesn't persist on serverless/ephemeral hosts — use PostgreSQL in
-> production. The local LLM (Ollama) needs a GPU/persistent box; the hosted demo
-> falls back to the rule-based engine automatically when Ollama isn't reachable.
+### Deploy steps (Catalyst CLI)
+```bash
+npm install -g zcatalyst-cli
+catalyst login
+cd ksp-crime-ai
+catalyst init            # select AppSail; source directory = backend
+#   Stack: Python (choose the highest available, e.g. Python 3.10/3.11)
+#   Startup command:  python main.py
+catalyst deploy          # bundles backend/ and deploys the AppSail service
+```
+
+### AppSail environment variables (set in the Catalyst console → AppSail → Config)
+| Key | Value |
+|-----|-------|
+| `DATABASE_URL` | `sqlite:////tmp/ksp_crime_ai.db`  (app dir is read-only — use /tmp) |
+| `KSP_NLP_PROVIDER` | `rules` |
+| `KSP_SECRET_KEY` | a long random string |
+| `KSP_CORS_ORIGINS` | your Slate frontend URL (e.g. `https://ksp-xxxx…slate.in`) |
+| `KSP_AUTOSEED` | `true` |
+
+### After deploy
+- AppSail gives the backend a URL. Put it into **Slate → App Variables →
+  `REACT_APP_API_BASE`** and redeploy the frontend.
+- Test the API: `GET <appsail-url>/health` → `{"status":"healthy",...}`.
+
+> Notes: The app directory is read-only on AppSail, so SQLite must live in `/tmp`
+> (set via `DATABASE_URL`). The local LLM (Ollama) is not used in the cloud — the
+> rule-based engine handles queries there.
 
 ---
 

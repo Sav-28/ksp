@@ -41,6 +41,21 @@ def on_startup():
     import logging
     create_tables()
 
+    # Ensure the NLP model is usable even if the shipped model can't be loaded
+    # (e.g. a scikit-learn/numpy version mismatch on the host) — retrain in memory.
+    try:
+        from src.nlp.intent_classifier import nlp_service
+        if not nlp_service.is_trained:
+            logging.info("NLP model not loaded — training in memory...")
+            from src.nlp.train_model import create_training_data
+            X, y = create_training_data()
+            try:
+                nlp_service.train(X, y)  # fits; save may fail on read-only FS (fine)
+            except Exception:
+                pass  # in-memory model is already fitted
+    except Exception as e:
+        logging.warning(f"NLP init warning: {e}")
+
     # Auto-seed on a fresh/empty database (e.g. ephemeral cloud hosts that
     # don't persist SQLite). Deterministic dataset; runs only when empty.
     if os.getenv("KSP_AUTOSEED", "true").lower() != "false":
@@ -101,4 +116,6 @@ async def health_check(db: Session = Depends(get_db)):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8004)
+    # Catalyst AppSail provides the port via X_ZOHO_CATALYST_LISTEN_PORT.
+    port = int(os.getenv("X_ZOHO_CATALYST_LISTEN_PORT", os.getenv("PORT", "8004")))
+    uvicorn.run(app, host="0.0.0.0", port=port)
