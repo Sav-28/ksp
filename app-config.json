@@ -1,0 +1,13 @@
+{
+	"command": "python main.py",
+	"build_path": "./backend",
+	"stack": "python_3_11",
+	"env_variables": {
+		"DATABASE_URL": "sqlite:////tmp/ksp_crime_ai.db",
+		"KSP_NLP_PROVIDER": "rules",
+		"KSP_AUTOSEED": "true",
+		"KSP_SECRET_KEY": "ksp-demo-3f9a7c21b64e48d0a1e2c5f7d9b0a4e6"
+	},
+	"memory": 512,
+	"scripts": {}
+}
