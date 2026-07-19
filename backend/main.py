@@ -1,7 +1,21 @@
+import os
+import sys
+
+# On Catalyst AppSail the runtime does NOT pip-install requirements.txt — the
+# dependencies are vendored (as Linux wheels) into ./vendor before deploy. Add
+# that folder to the import path so `import fastapi` etc. resolve on the cloud.
+# Locally this is harmless: the folder won't exist and packages come from the
+# active environment instead.
+# NOTE: append (not insert) so locally-installed packages take priority on your
+# dev machine — the vendored Linux wheels are only used as a fallback, which is
+# exactly the situation on the clean AppSail runtime.
+_VENDOR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vendor")
+if os.path.isdir(_VENDOR) and _VENDOR not in sys.path:
+    sys.path.append(_VENDOR)
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import os
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 

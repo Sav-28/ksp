@@ -67,3 +67,6 @@ alembic/versions/
 .coverage
 .pytest_cache/
 htmlcov/
+
+# Catalyst AppSail vendored dependencies (Linux wheels, regenerated per deploy)
+backend/vendor/
