@@ -76,6 +76,18 @@ class QueryTranslator:
         conditions = []
         params = {}
 
+        # Common alternate spellings -> canonical DB stem (so LIKE matches)
+        location_aliases = {
+            "bangalore": "Bengaluru", "bengaluru": "Bengaluru", "bengalooru": "Bengaluru",
+            "mysore": "Mysuru", "mysuru": "Mysuru",
+            "belgaum": "Belagavi", "belagavi": "Belagavi",
+            "gulbarga": "Kalaburagi", "kalaburagi": "Kalaburagi",
+            "mangalore": "Mangaluru", "mangaluru": "Mangaluru",
+            "hubballi": "Hubli", "hubli": "Hubli",
+            "dharwad": "Dharwad", "tumkur": "Tumakuru", "tumakuru": "Tumakuru",
+            "raichur": "Raichur", "bijapur": "Vijayapura", "vijayapura": "Vijayapura",
+        }
+
         # Process location entity
         location = entities.get("location")
         if location:
@@ -83,9 +95,10 @@ class QueryTranslator:
             if not location or not isinstance(location, str):
                 raise ValueError("Location must be a non-empty string")
 
-            # Case-insensitive matching across district, taluk, or police_station
-            # Using LOWER for SQLite compatibility
+            # Normalize common alternate spellings so "Bangalore" matches
+            # "Bengaluru Urban/Rural", "Mysore" matches "Mysuru", etc.
             loc_param = location.strip()
+            loc_param = location_aliases.get(loc_param.lower(), loc_param)
             # Add wildcards for partial match
             params["loc"] = f"%{loc_param}%"
             conditions.append(
