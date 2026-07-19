@@ -36,13 +36,21 @@ from src.api.routes.briefing import router as briefing_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
-# CORS: restrict to configured origins (comma-separated). Defaults to local dev.
+# CORS: allow the configured origins (comma-separated) plus any Catalyst-hosted
+# frontend (Slate / catalystserverless / catalystappsail domains) via a regex,
+# so the deployed frontend can call the API without hard-coding its exact URL.
 _cors_origins = os.getenv("KSP_CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+
+# Matches https://<anything>.slate.in / .catalystserverless.com / .catalystappsail.in
+# / .zohostratus.com (Catalyst-hosted frontends). Override via KSP_CORS_ORIGIN_REGEX.
+_default_regex = r"https://([a-z0-9-]+\.)*(slate\.in|catalystserverless\.com|catalystappsail\.in|zohostratus\.com)"
+ALLOWED_ORIGIN_REGEX = os.getenv("KSP_CORS_ORIGIN_REGEX", _default_regex)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
