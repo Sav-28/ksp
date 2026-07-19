@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { localizePersonName } from '../locale';
 
 export interface GraphNode {
   id: string;
@@ -41,12 +42,14 @@ const NetworkGraph = ({
   width = 720,
   height = 460,
   onNodeClick,
+  language = 'en',
 }: {
   nodes: GraphNode[];
   edges: GraphEdge[];
   width?: number;
   height?: number;
   onNodeClick?: (node: GraphNode) => void;
+  language?: 'en' | 'kn';
 }) => {
   const [hover, setHover] = useState<string | null>(null);
 
@@ -175,7 +178,7 @@ const NetworkGraph = ({
                 fontWeight={600}
                 fill="#1a237e"
               >
-                {node.label}
+                {localizePersonName(node.label, language)}
               </text>
             )}
           </g>

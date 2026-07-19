@@ -365,7 +365,7 @@ const GovHeader = ({
 const CrimeCaseCard = ({ crime, index, language, onClick }: { crime: CrimeRecord; index: number; language: 'en' | 'kn'; onClick?: (fir: string) => void }) => {
   const accent = accentFor(crime.crime_type);
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
-  const accused = crime.accused || [];
+  const accused = (crime.accused || []).map((n) => localizePersonName(n, language));
   const accusedText = accused.length
     ? (accused.length > 2 ? `${accused.slice(0, 2).join(', ')} +${accused.length - 2}` : accused.join(', '))
     : t('Unknown', 'ಅಜ್ಞಾತ');
@@ -822,57 +822,49 @@ const VoiceButton = ({
   const showNote = (msg: string) => {
     setNote(msg);
     if (noteTimer.current) clearTimeout(noteTimer.current);
-    noteTimer.current = setTimeout(() => setNote(null), 3500);
+    noteTimer.current = setTimeout(() => setNote(null), 4000);
   };
 
-  const startRecognition = (lang: string, isRetry = false) => {
-    // Abort any lingering instance so we never hold the mic ourselves.
-    if (recognitionRef.current) {
-      try { recognitionRef.current.abort(); } catch { /* ignore */ }
-      recognitionRef.current = null;
-    }
-
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
+  const begin = (lang: string, isRetry = false) => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SR();
     recognitionRef.current = recognition;
     recognition.lang = lang;
+    recognition.continuous = false;
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
-    setIsListening(true);
+    recognition.onstart = () => setIsListening(true);
 
-    recognition.onresult = (event: SpeechRecognitionEvent) => {
+    recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
-      setIsListening(false);
       onVoiceResult(transcript);
     };
 
-    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      setIsListening(false);
+    recognition.onerror = (event: any) => {
       const err = event.error;
-      // Benign — no need to bother the user
-      if (err === 'no-speech' || err === 'aborted') {
-        showNote(language === 'en' ? "Didn't catch that — please try again." : 'ಕೇಳಿಸಲಿಲ್ಲ — ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.');
-        return;
-      }
-      // Kannada not supported by this browser → retry once in English
       if (err === 'language-not-supported' && !isRetry) {
-        showNote(language === 'en' ? 'Switching to English voice…' : 'ಇಂಗ್ಲಿಷ್ ಧ್ವನಿಗೆ ಬದಲಾಯಿಸಲಾಗುತ್ತಿದೆ…');
-        setTimeout(() => startRecognition('en-IN', true), 300);
+        showNote(language === 'en' ? 'Kannada voice unavailable — using English.' : 'ಇಂಗ್ಲಿಷ್ ಧ್ವನಿ ಬಳಸಲಾಗುತ್ತಿದೆ.');
+        setTimeout(() => begin('en-IN', true), 250);
         return;
       }
-      if (err === 'not-allowed' || err === 'service-not-allowed') {
-        showNote(language === 'en' ? 'Microphone blocked. Allow mic access in your browser.' : 'ಮೈಕ್ರೊಫೋನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ.');
+      if (err === 'no-speech') {
+        showNote(language === 'en' ? "Didn't hear anything — try again." : 'ಏನೂ ಕೇಳಿಸಲಿಲ್ಲ — ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.');
+      } else if (err === 'not-allowed' || err === 'service-not-allowed') {
+        showNote(language === 'en' ? 'Allow microphone access in the browser, then reload.' : 'ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿಸಿ.');
       } else if (err === 'audio-capture') {
-        showNote(language === 'en' ? 'Mic not captured — reload the page (Ctrl+R) and click VOICE once.' : 'ಮೈಕ್ ಸಿಗಲಿಲ್ಲ — ಪುಟ ಮರುಲೋಡ್ ಮಾಡಿ.');
+        showNote(language === 'en' ? 'No microphone available on this device.' : 'ಮೈಕ್ರೊಫೋನ್ ಲಭ್ಯವಿಲ್ಲ.');
       } else if (err === 'network') {
         showNote(language === 'en' ? 'Voice needs an internet connection.' : 'ಧ್ವನಿಗೆ ಇಂಟರ್ನೆಟ್ ಅಗತ್ಯ.');
-      } else {
-        showNote(language === 'en' ? 'Voice unavailable — please type instead.' : 'ಧ್ವನಿ ಲಭ್ಯವಿಲ್ಲ — ಟೈಪ್ ಮಾಡಿ.');
+      } else if (err !== 'aborted') {
+        showNote(language === 'en' ? 'Voice error — please type instead.' : 'ಧ್ವನಿ ದೋಷ — ಟೈಪ್ ಮಾಡಿ.');
       }
     };
 
-    recognition.onend = () => { setIsListening(false); recognitionRef.current = null; };
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
 
     try {
       recognition.start();
@@ -882,43 +874,19 @@ const VoiceButton = ({
     }
   };
 
-  const handleVoiceClick = async () => {
-    if (isListening) return;
-    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+  const handleVoiceClick = () => {
+    // If already listening, stop (toggle) and release the mic.
+    if (isListening && recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+      setIsListening(false);
+      return;
+    }
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
       showNote(language === 'en' ? 'Voice needs Chrome or Edge.' : 'ಧ್ವನಿಗೆ Chrome ಅಥವಾ Edge ಬಳಸಿ.');
       return;
     }
-
-    // Ensure permission is granted (first-time prompt). We request then release
-    // the device, and give the Speech API a brief moment to acquire it cleanly
-    // (rapid acquire/release/acquire can otherwise trigger 'audio-capture').
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((tr) => tr.stop());
-        await new Promise((r) => setTimeout(r, 350));
-      } catch (err: any) {
-        const name = err?.name || '';
-        if (name === 'NotAllowedError' || name === 'SecurityError') {
-          showNote(language === 'en'
-            ? 'Microphone blocked. Click the mic icon in the address bar and allow it.'
-            : 'ಮೈಕ್ರೊಫೋನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ. ವಿಳಾಸ ಪಟ್ಟಿಯಲ್ಲಿ ಅನುಮತಿಸಿ.');
-        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
-          showNote(language === 'en'
-            ? 'No microphone detected. Check Windows sound settings.'
-            : 'ಮೈಕ್ರೊಫೋನ್ ಕಂಡುಬಂದಿಲ್ಲ.');
-        } else if (name === 'NotReadableError') {
-          showNote(language === 'en'
-            ? 'Microphone is in use by another app. Close it and retry.'
-            : 'ಮೈಕ್ರೊಫೋನ್ ಬೇರೆ ಅಪ್ಲಿಕೇಶನ್ ಬಳಸುತ್ತಿದೆ.');
-        } else {
-          showNote(language === 'en' ? 'Could not access the microphone.' : 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶಿಸಲಾಗಲಿಲ್ಲ.');
-        }
-        return;
-      }
-    }
-
-    startRecognition(language === 'kn' ? 'kn-IN' : 'en-IN');
+    begin(language === 'kn' ? 'kn-IN' : 'en-IN');
   };
 
   return (
@@ -934,7 +902,7 @@ const VoiceButton = ({
       )}
       <button
         onClick={handleVoiceClick}
-        disabled={disabled || isListening}
+        disabled={disabled}
         style={{
           backgroundColor: isListening ? '#d32f2f' : '#1976d2',
           color: 'white',
@@ -951,7 +919,7 @@ const VoiceButton = ({
           transition: 'all 0.2s',
           boxShadow: isListening ? '0 0 20px rgba(211,47,47,0.5)' : '0 2px 4px rgba(25,118,210,0.3)'
         }}
-        title={isListening ? 'Listening...' : 'Click to speak'}
+        title={isListening ? 'Click to stop' : 'Click to speak'}
       >
         🎤 {isListening ? (language === 'en' ? 'LISTENING...' : 'ಆಲಿಸುತ್ತಿದೆ...') : (language === 'en' ? 'VOICE' : 'ಧ್ವನಿ')}
       </button>

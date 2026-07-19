@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
 import NetworkGraph, { GraphNode, GraphEdge } from './NetworkGraph';
+import { localizePersonName } from '../locale';
 
 interface TopPerson {
   person_id: number;
@@ -87,7 +88,7 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
             <div style={cardTitle}>🔗 {t('Most Connected Offenders', 'ಅತಿ ಹೆಚ್ಚು ಸಂಪರ್ಕಿತ ಅಪರಾಧಿಗಳು')}</div>
             {overview.top_connected_persons.map((p) => (
               <div key={p.person_id} onClick={() => loadPersonNetwork(p.person_id, p.name)} style={rowItem}>
-                <span>👤 {p.name}</span>
+                <span>👤 {localizePersonName(p.name, language)}</span>
                 <span style={{ fontSize: 12, color: '#666' }}>{p.connections} {t('links', 'ಸಂಪರ್ಕ')}</span>
               </div>
             ))}
@@ -112,7 +113,7 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
             </div>
             {graph ? (
               <>
-                <NetworkGraph nodes={graph.nodes} edges={graph.edges} onNodeClick={(n) => n.person_id && loadPersonNetwork(n.person_id, n.label)} />
+                <NetworkGraph nodes={graph.nodes} edges={graph.edges} language={language} onNodeClick={(n) => n.person_id && loadPersonNetwork(n.person_id, n.label)} />
                 <div style={{ display: 'flex', gap: 16, marginTop: 10, fontSize: 12, color: '#666', flexWrap: 'wrap' }}>
                   <span>🔴 {t('Focus', 'ಕೇಂದ್ರ')}</span>
                   <span>🟠 {t('Gang leader', 'ಗ್ಯಾಂಗ್ ನಾಯಕ')}</span>

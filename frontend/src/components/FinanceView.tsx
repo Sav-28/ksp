@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
-import { localizeCrimeType } from '../locale';
+import { localizeCrimeType, localizePersonName } from '../locale';
 
 interface Trail {
   id: number;
@@ -81,8 +81,8 @@ const FinanceView = ({ language }: { language: 'en' | 'kn' }) => {
             <tbody>
               {data.trails.map((tr, i) => (
                 <tr key={tr.id} style={{ borderBottom: '1px solid #eee', background: i % 2 ? '#fafafa' : '#fff' }}>
-                  <td style={td}>👤 {tr.from.name}<div style={{ fontSize: 11, color: '#999' }}>{tr.from.bank}</div></td>
-                  <td style={td}>👤 {tr.to.name}<div style={{ fontSize: 11, color: '#999' }}>{tr.to.bank}</div></td>
+                  <td style={td}>👤 {localizePersonName(tr.from.name, language)}<div style={{ fontSize: 11, color: '#999' }}>{tr.from.bank}</div></td>
+                  <td style={td}>👤 {localizePersonName(tr.to.name, language)}<div style={{ fontSize: 11, color: '#999' }}>{tr.to.bank}</div></td>
                   <td style={{ ...td, fontWeight: 700, color: '#c62828' }}>{fmt(tr.amount)}</td>
                   <td style={td}>{tr.date}</td>
                   <td style={td}>
