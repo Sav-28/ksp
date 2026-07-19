@@ -853,7 +853,7 @@ const VoiceButton = ({
       } else if (err === 'not-allowed' || err === 'service-not-allowed') {
         showNote(language === 'en' ? 'Allow microphone access in the browser, then reload.' : 'ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿಸಿ.');
       } else if (err === 'audio-capture') {
-        showNote(language === 'en' ? 'No microphone available on this device.' : 'ಮೈಕ್ರೊಫೋನ್ ಲಭ್ಯವಿಲ್ಲ.');
+        showNote(language === 'en' ? 'Chrome can’t use the mic — open chrome://settings/content/microphone and select your device.' : 'Chrome ಮೈಕ್ ಸೆಟ್ಟಿಂಗ್‌ನಲ್ಲಿ ಸಾಧನ ಆಯ್ಕೆಮಾಡಿ.');
       } else if (err === 'network') {
         showNote(language === 'en' ? 'Voice needs an internet connection.' : 'ಧ್ವನಿಗೆ ಇಂಟರ್ನೆಟ್ ಅಗತ್ಯ.');
       } else if (err !== 'aborted') {
@@ -874,7 +874,7 @@ const VoiceButton = ({
     }
   };
 
-  const handleVoiceClick = () => {
+  const handleVoiceClick = async () => {
     // If already listening, stop (toggle) and release the mic.
     if (isListening && recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch { /* ignore */ }
@@ -886,6 +886,29 @@ const VoiceButton = ({
       showNote(language === 'en' ? 'Voice needs Chrome or Edge.' : 'ಧ್ವನಿಗೆ Chrome ಅಥವಾ Edge ಬಳಸಿ.');
       return;
     }
+
+    // Definitive capability check: is there a usable mic + permission?
+    // This gives an accurate reason and grants permission before recognition.
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((tr) => tr.stop());   // release immediately
+        await new Promise((r) => setTimeout(r, 400));     // let the OS free it
+      } catch (e: any) {
+        const n = e?.name || '';
+        if (n === 'NotFoundError' || n === 'DevicesNotFoundError') {
+          showNote(language === 'en' ? 'No microphone is connected to this computer.' : 'ಈ ಕಂಪ್ಯೂಟರ್‌ಗೆ ಮೈಕ್ರೊಫೋನ್ ಸಂಪರ್ಕವಿಲ್ಲ.');
+        } else if (n === 'NotReadableError' || n === 'TrackStartError') {
+          showNote(language === 'en' ? 'Mic is locked by another app (Zoom/Teams/etc). Close it or restart the PC.' : 'ಮೈಕ್ ಬೇರೆ ಅಪ್ಲಿಕೇಶನ್ ಬಳಸುತ್ತಿದೆ.');
+        } else if (n === 'NotAllowedError' || n === 'SecurityError') {
+          showNote(language === 'en' ? 'Allow mic in the address-bar icon, then reload.' : 'ಮೈಕ್ ಅನುಮತಿಸಿ, ನಂತರ ಮರುಲೋಡ್ ಮಾಡಿ.');
+        } else {
+          showNote(language === 'en' ? 'Could not access the microphone.' : 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶಿಸಲಾಗಲಿಲ್ಲ.');
+        }
+        return;
+      }
+    }
+
     begin(language === 'kn' ? 'kn-IN' : 'en-IN');
   };
 
