@@ -1057,6 +1057,38 @@ const ChatPage: React.FC = () => {
     handleSubmit(transcript);
   };
 
+  // Guided Tour — a scripted investigation that showcases the platform.
+  const runGuidedTour = async () => {
+    if (isLoading) return;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const narrate = (en: string, kn: string) =>
+      setMessages(prev => [...prev, { text: currentLanguage === 'en' ? en : kn, isUser: false, intent: 'NARRATOR' }]);
+
+    conversationContext.current = null;
+    setMessages([]);
+    await sleep(400);
+    narrate('🎬 Guided Tour — Investigating a reported surge in chain-snatching.',
+            '🎬 ಮಾರ್ಗದರ್ಶಿ ಪ್ರವಾಸ — ಸರಗಳ್ಳತನದ ಏರಿಕೆಯ ತನಿಖೆ.');
+    await sleep(1400);
+    narrate('Step 1 — Where are crimes concentrated? Let\'s see the district breakdown.',
+            'ಹಂತ 1 — ಅಪರಾಧಗಳು ಎಲ್ಲಿ ಕೇಂದ್ರೀಕೃತವಾಗಿವೆ? ಜಿಲ್ಲೆವಾರು ವಿಭಜನೆ.');
+    await sleep(1200);
+    await handleSubmit('crimes by district');
+    await sleep(1400);
+    narrate('Bengaluru Urban leads. Let\'s pull the snatching cases there.',
+            'ಬೆಂಗಳೂರು ನಗರ ಮುಂದಿದೆ. ಅಲ್ಲಿನ ಸರಗಳ್ಳತನ ಪ್ರಕರಣಗಳನ್ನು ನೋಡೋಣ.');
+    await sleep(1200);
+    await handleSubmit('show snatching in bengaluru');
+    await sleep(1400);
+    narrate('Step 2 — A repeat offender stands out. Generating an AI intelligence briefing...',
+            'ಹಂತ 2 — ಒಬ್ಬ ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿ. AI ಗುಪ್ತಚರ ಬ್ರೀಫಿಂಗ್ ರಚಿಸಲಾಗುತ್ತಿದೆ...');
+    await sleep(1200);
+    await handleSubmit('brief me on Vikram Reddy');
+    await sleep(1200);
+    narrate('✅ Tour complete. Explore the MAP (hotspots), NETWORK (gangs), and FORECAST tabs for more.',
+            '✅ ಪ್ರವಾಸ ಪೂರ್ಣ. MAP, NETWORK ಮತ್ತು FORECAST ಟ್ಯಾಬ್‌ಗಳನ್ನು ಅನ್ವೇಷಿಸಿ.');
+  };
+
   // Click a crime card → fetch and append its full FIR detail
   const showFirDetail = async (fir: string) => {
     if (!fir) return;
@@ -1311,7 +1343,19 @@ const ChatPage: React.FC = () => {
           backgroundColor: '#fafafa'
         }}>
           {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} />
+            message.intent === 'NARRATOR' ? (
+              <div key={index} style={{
+                textAlign: 'center', margin: '16px 0',
+              }}>
+                <span style={{
+                  display: 'inline-block', background: 'linear-gradient(90deg,#ff9800,#fb8c00)',
+                  color: '#fff', fontSize: '13px', fontWeight: 600, padding: '8px 18px',
+                  borderRadius: '20px', boxShadow: '0 2px 6px rgba(255,152,0,0.35)', maxWidth: '80%',
+                }}>{message.text}</span>
+              </div>
+            ) : (
+              <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} />
+            )
           ))}
           <div ref={messagesEndRef} />
         </div>
@@ -1337,6 +1381,19 @@ const ChatPage: React.FC = () => {
                 : "ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಇಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ..."}
               disabled={isLoading}
             />
+            <button
+              onClick={runGuidedTour}
+              disabled={isLoading}
+              title={currentLanguage === 'en' ? 'Run a guided investigation demo' : 'ಮಾರ್ಗದರ್ಶಿ ಡೆಮೊ ಚಲಾಯಿಸಿ'}
+              style={{
+                backgroundColor: isLoading ? '#bdbdbd' : '#2e7d32', color: 'white', border: 'none',
+                borderRadius: '6px', padding: '14px 16px', cursor: isLoading ? 'not-allowed' : 'pointer',
+                fontSize: '15px', fontWeight: 600, whiteSpace: 'nowrap',
+                boxShadow: '0 2px 4px rgba(46,125,50,0.3)'
+              }}
+            >
+              🎬 {currentLanguage === 'en' ? 'TOUR' : 'ಪ್ರವಾಸ'}
+            </button>
             <button
               onClick={exportConversationPDF}
               title={currentLanguage === 'en' ? 'Export conversation as PDF' : 'ಸಂಭಾಷಣೆಯನ್ನು PDF ಆಗಿ ರಫ್ತು ಮಾಡಿ'}
