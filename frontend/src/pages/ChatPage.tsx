@@ -633,6 +633,15 @@ const MessageBubble = ({ message, language }: { message: ChatMessage; language: 
                 🤖 KSP AI ASSISTANT
               </div>
             )}
+            {/* Briefing banner */}
+            {message.intent === 'BRIEFING' && (
+              <div style={{
+                fontSize: '12px', fontWeight: 700, color: '#fff', background: 'linear-gradient(90deg,#1a237e,#3949ab)',
+                padding: '6px 12px', borderRadius: '6px', marginBottom: '10px', display: 'inline-block'
+              }}>
+                🛡️ AI INTELLIGENCE BRIEFING
+              </div>
+            )}
             {/* Answer text */}
             <div style={{ whiteSpace: 'pre-wrap', marginBottom: isRich ? '12px' : 0 }}>{message.text}</div>
 
@@ -960,6 +969,12 @@ const ChatPage: React.FC = () => {
           isUser: false,
           intent: data.intent,
           detail: data.detail
+        }]);
+      } else if (data.intent === 'BRIEFING') {
+        setMessages(prev => [...prev, {
+          text: data.answer,
+          isUser: false,
+          intent: 'BRIEFING',
         }]);
       } else if (data.intent === 'CASE_SUMMARY') {
         const cs = data.case_summary;

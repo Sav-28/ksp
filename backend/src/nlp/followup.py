@@ -110,6 +110,27 @@ def detect_person_query(text: str) -> Optional[str]:
     return name.title()
 
 
+# Intelligence briefing requests: "brief me on X", "intelligence report on X"
+_BRIEFING_RE = re.compile(
+    r'(?:brief(?:ing)?(?:\s+me)?|intelligence\s+(?:report|briefing)|dossier|profile\s+report)\s+'
+    r'(?:on|about|for|of)\s+([a-zA-Z][a-zA-Z .\'-]{2,40})',
+    re.IGNORECASE,
+)
+
+
+def detect_briefing_request(text: str) -> Optional[str]:
+    """Detect 'brief me on <name>' style requests. Returns the name or None."""
+    m = _BRIEFING_RE.search(text)
+    if not m:
+        return None
+    name = m.group(1).strip().strip("?.!").strip()
+    if not name:
+        return None
+    if name.split()[0].lower() in _PERSON_STOP:
+        return None
+    return name.title()
+
+
 def merge_context(entities: Dict[str, Any], context: Optional[Dict[str, Any]], text: str) -> Dict[str, Any]:
     """
     Carry forward entities from the previous turn for follow-up queries.

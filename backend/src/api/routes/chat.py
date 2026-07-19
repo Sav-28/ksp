@@ -8,7 +8,10 @@ import os
 
 # Import real services
 from src.nlp.intent_classifier import nlp_service
-from src.nlp.followup import detect_detail_request, detect_case_action, detect_person_query, extract_fir_number, merge_context
+from src.nlp.followup import (
+    detect_detail_request, detect_case_action, detect_person_query,
+    detect_briefing_request, extract_fir_number, merge_context,
+)
 from src.ai.language_provider import get_intent_and_entities as understand
 from src.query_engine.translator import QueryTranslator
 from src.database.session import get_db
@@ -168,6 +171,55 @@ def build_person_response(db: Session, username: str, input_text: str,
     }
 
 
+def _resolve_best_person(db: Session, name: str):
+    """Resolve a name to the most relevant Person (most accused cases). Returns
+    (person, disambiguation_names) — person is None if not found; if ambiguous
+    with no case data, returns (None, [names])."""
+    matches = db.query(Person).filter(Person.full_name.ilike(f"%{name}%")).all()
+    if not matches:
+        return None, []
+    match_ids = [p.id for p in matches]
+    counts = dict(
+        db.query(CasePerson.person_id, func.count(CasePerson.id))
+        .filter(CasePerson.person_id.in_(match_ids), CasePerson.role == "accused")
+        .group_by(CasePerson.person_id).all()
+    )
+    exact = [p for p in matches if p.full_name.lower() == name.lower()]
+    distinct_names = sorted({p.full_name for p in matches})
+    if not exact and len(distinct_names) > 1:
+        return None, distinct_names[:8]
+    pool = exact if exact else matches
+    return max(pool, key=lambda p: counts.get(p.id, 0)), []
+
+
+def build_briefing_response(db: Session, username: str, input_text: str,
+                            language: str, name: str, context: dict) -> Dict[str, Any]:
+    """Generate an AI intelligence briefing for a named person (chat trigger)."""
+    from src.services.briefing import build_person_briefing
+
+    person, ambiguous = _resolve_best_person(db, name)
+    if ambiguous:
+        return {"answer": f"Found multiple people matching '{name}': {', '.join(ambiguous)}. "
+                          f"Please specify the full name.",
+                "intent": "BRIEFING", "confidence": 1.0, "entities": {"person_name": name},
+                "context": context, "sql": None, "results": [], "error": None}
+    if not person:
+        return {"answer": f"No person named '{name}' was found in the records.",
+                "intent": "BRIEFING", "confidence": 1.0, "entities": {"person_name": name},
+                "context": context, "sql": None, "results": [], "error": None}
+
+    result = build_person_briefing(db, person.id)
+    write_audit(db, username, input_text, language, "BRIEFING", 1.0, None, 1)
+    return {
+        "answer": result["briefing"],
+        "intent": "BRIEFING", "confidence": 1.0,
+        "entities": {"person_name": person.full_name, "person_id": person.id},
+        "briefing": result,
+        "context": {"last_fir": context.get("last_fir"), "entities": context.get("entities", {})},
+        "sql": None, "results": [], "error": None,
+    }
+
+
 def write_audit(db: Session, username: str, query_text: str, language: str,
                 intent: str, confidence: float, sql: str, row_count: int) -> None:
     """Persist an audit log entry. Never raises — auditing must not break queries."""
@@ -220,6 +272,11 @@ async def chat_endpoint(
         # Validate input
         if not input_text or not isinstance(input_text, str):
             raise ValueError("Text input is required and must be a string")
+
+        # ---- AI Intelligence Briefing (Areas 2,5,6,7,9): "brief me on X" ----
+        briefing_name = detect_briefing_request(input_text)
+        if briefing_name:
+            return build_briefing_response(db, username, input_text, language, briefing_name, context)
 
         # ---- Context-aware detail / follow-up handling (Area 1) ----
         detail_type = detect_detail_request(input_text)

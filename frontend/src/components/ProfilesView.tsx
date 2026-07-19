@@ -37,6 +37,8 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [briefing, setBriefing] = useState<{ text: string; engine: string } | null>(null);
+  const [briefingLoading, setBriefingLoading] = useState(false);
 
   const load = async (searchTerm = '') => {
     setLoading(true); setError(null);
@@ -59,10 +61,25 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
   }, [search]);
 
   const openProfile = async (id: number) => {
+    setBriefing(null);  // clear any previous briefing
     try {
       const res = await apiFetch(`/api/offenders/${id}`);
       setProfile(await res.json());
     } catch { /* ignore */ }
+  };
+
+  const generateBriefing = async (id: number) => {
+    setBriefingLoading(true);
+    setBriefing(null);
+    try {
+      const res = await apiFetch(`/api/briefing/person/${id}`);
+      const data = await res.json();
+      setBriefing({ text: data.briefing, engine: data.engine });
+    } catch {
+      setBriefing({ text: t('Could not generate briefing.', 'ಬ್ರೀಫಿಂಗ್ ರಚಿಸಲಾಗಲಿಲ್ಲ.'), engine: 'error' });
+    } finally {
+      setBriefingLoading(false);
+    }
   };
 
   if (error) return <div style={{ padding: 40, textAlign: 'center', color: '#d32f2f' }}>⚠️ {error}</div>;
@@ -145,6 +162,37 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
                   <div style={{ fontSize: 11 }}>{profile.risk_level} {t('Risk', 'ಅಪಾಯ')}</div>
                 </div>
               </div>
+
+              {/* AI Intelligence Briefing */}
+              <button
+                onClick={() => generateBriefing(profile.person_id)}
+                disabled={briefingLoading}
+                style={{
+                  width: '100%', marginBottom: 12, padding: '10px',
+                  background: briefingLoading ? '#9e9e9e' : 'linear-gradient(90deg,#1a237e,#3949ab)',
+                  color: '#fff', border: 'none', borderRadius: 8, cursor: briefingLoading ? 'wait' : 'pointer',
+                  fontSize: 14, fontWeight: 700,
+                }}
+              >
+                {briefingLoading
+                  ? '⏳ ' + t('Generating intelligence briefing...', 'ಬ್ರೀಫಿಂಗ್ ರಚಿಸಲಾಗುತ್ತಿದೆ...')
+                  : '🔍 ' + t('Generate AI Intelligence Briefing', 'AI ಗುಪ್ತಚರ ಬ್ರೀಫಿಂಗ್ ರಚಿಸಿ')}
+              </button>
+
+              {briefing && (
+                <div style={{
+                  background: '#f3f6fc', border: '1px solid #c5cae9', borderLeft: '4px solid #1a237e',
+                  borderRadius: 8, padding: '14px 16px', marginBottom: 14,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#1a237e', marginBottom: 8 }}>
+                    🛡️ {t('AI Intelligence Briefing', 'AI ಗುಪ್ತಚರ ಬ್ರೀಫಿಂಗ್')}
+                    <span style={{ fontSize: 10, color: '#888', fontWeight: 400, marginLeft: 8 }}>({briefing.engine})</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#222', whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+                    {briefing.text}
+                  </div>
+                </div>
+              )}
 
               {/* Risk factors (explainable) */}
               <div style={{ background: '#fff3e0', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13 }}>
