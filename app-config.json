@@ -1,5 +1,5 @@
 {
-	"command": "python main.py",
+	"command": "python3 -u main.py",
 	"build_path": "./backend",
 	"stack": "python_3_11",
 	"env_variables": {
