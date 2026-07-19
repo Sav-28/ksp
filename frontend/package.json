@@ -4,6 +4,8 @@
   "private": true,
   "dependencies": {
     "@types/leaflet": "^1.9.21",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^2.5.1",
     "leaflet": "^1.9.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"

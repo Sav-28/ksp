@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Dashboard from '../components/Dashboard';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import Login from '../components/Login';
 import NetworkView from '../components/NetworkView';
 import HotspotView from '../components/HotspotView';
@@ -1026,8 +1028,9 @@ const ChatPage: React.FC = () => {
   };
 
   // Export the conversation as a PDF (via the browser's print-to-PDF, which
-  // renders Kannada correctly using system fonts and needs no dependencies).
-  const exportConversationPDF = () => {
+  // renders Kannada correctly (via html2canvas) and downloads directly — no
+  // new tab, no print dialog.
+  const exportConversationPDF = async () => {
     const esc = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -1067,37 +1070,61 @@ const ChatPage: React.FC = () => {
       ? 'KSP Crime AI — Conversation Transcript'
       : 'ಕೆಎಸ್‌ಪಿ ಅಪರಾಧ AI — ಸಂಭಾಷಣೆ ದಾಖಲೆ';
 
-    const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${title}</title>
+    // Build an off-screen, print-styled node, rasterize it, and save as PDF.
+    const container = document.createElement('div');
+    container.style.cssText = 'position:fixed;left:-10000px;top:0;width:780px;background:#ffffff;';
+    container.innerHTML = `
 <style>
-  body{font-family:"Segoe UI",Tahoma,sans-serif;margin:30px;color:#212121;}
-  .hdr{border-bottom:3px solid #ff9800;padding-bottom:12px;margin-bottom:20px;}
-  .hdr h1{color:#1a237e;font-size:20px;margin:0;}
-  .hdr .sub{color:#666;font-size:13px;margin-top:4px;}
-  .msg{display:flex;margin:10px 0;}
-  .msg.right{justify-content:flex-end;}
-  .bubble{max-width:75%;border:1px solid #e0e0e0;border-radius:8px;padding:10px 14px;}
-  .who{font-size:11px;font-weight:700;color:#1a237e;margin-bottom:4px;}
-  .txt{font-size:14px;white-space:pre-wrap;line-height:1.5;}
-  .rec{font-size:12px;color:#444;border-top:1px solid #eee;margin-top:6px;padding-top:6px;}
-  .desc{color:#777;}
-  .ftr{margin-top:24px;border-top:1px solid #ccc;padding-top:10px;font-size:11px;color:#999;text-align:center;}
-</style></head><body>
+  .ksp-pdf{font-family:"Segoe UI",Tahoma,sans-serif;padding:28px;color:#212121;background:#fff;}
+  .ksp-pdf .hdr{border-bottom:3px solid #ff9800;padding-bottom:12px;margin-bottom:20px;}
+  .ksp-pdf .hdr h1{color:#1a237e;font-size:20px;margin:0;}
+  .ksp-pdf .hdr .sub{color:#666;font-size:13px;margin-top:4px;}
+  .ksp-pdf .msg{display:flex;margin:10px 0;}
+  .ksp-pdf .msg.right{justify-content:flex-end;}
+  .ksp-pdf .bubble{max-width:75%;border:1px solid #e0e0e0;border-radius:8px;padding:10px 14px;}
+  .ksp-pdf .who{font-size:11px;font-weight:700;color:#1a237e;margin-bottom:4px;}
+  .ksp-pdf .txt{font-size:14px;white-space:pre-wrap;line-height:1.5;}
+  .ksp-pdf .rec{font-size:12px;color:#444;border-top:1px solid #eee;margin-top:6px;padding-top:6px;}
+  .ksp-pdf .desc{color:#777;}
+  .ksp-pdf .ftr{margin-top:24px;border-top:1px solid #ccc;padding-top:10px;font-size:11px;color:#999;text-align:center;}
+</style>
+<div class="ksp-pdf">
   <div class="hdr"><h1>🛡️ ${title}</h1>
   <div class="sub">${currentLanguage === 'en' ? 'Government of Karnataka · Karnataka State Police' : 'ಕರ್ನಾಟಕ ಸರ್ಕಾರ · ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್'} · ${new Date().toLocaleString()}</div>
   <div class="sub">${currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ'}: ${esc(user?.name || '')}</div></div>
   ${rows}
   <div class="ftr">${currentLanguage === 'en' ? 'Confidential — for authorized law enforcement use only.' : 'ಗೌಪ್ಯ — ಅಧಿಕೃತ ಕಾನೂನು ಜಾರಿ ಬಳಕೆಗೆ ಮಾತ್ರ.'}</div>
-  <script>window.onload=function(){window.print();}</script>
-</body></html>`;
+</div>`;
+    document.body.appendChild(container);
 
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(html);
-      w.document.close();
-    } else {
-      alert(currentLanguage === 'en'
-        ? 'Please allow pop-ups to export the PDF.'
-        : 'PDF ರಫ್ತು ಮಾಡಲು ಪಾಪ್‌ಅಪ್‌ಗಳನ್ನು ಅನುಮತಿಸಿ.');
+    try {
+      const target = container.querySelector('.ksp-pdf') as HTMLElement;
+      const canvas = await html2canvas(target, { scale: 2, backgroundColor: '#ffffff' });
+      const imgData = canvas.toDataURL('image/png');
+
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageW = 210, pageH = 297;
+      const imgW = pageW;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      let heightLeft = imgH;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position -= pageH;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
+        heightLeft -= pageH;
+      }
+
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      pdf.save(`KSP_Conversation_${stamp}.pdf`);
+    } catch (e) {
+      console.error('PDF export failed:', e);
+      alert(currentLanguage === 'en' ? 'Could not generate PDF.' : 'PDF ರಚಿಸಲಾಗಲಿಲ್ಲ.');
+    } finally {
+      document.body.removeChild(container);
     }
   };
 
