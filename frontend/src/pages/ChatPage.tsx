@@ -815,17 +815,19 @@ const VoiceButton = ({
   language: 'en' | 'kn';
 }) => {
   const [isListening, setIsListening] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const noteTimer = useRef<any>(null);
 
-  const handleVoiceClick = () => {
-    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
-      alert("Voice recognition not available. Please use Chrome or Edge browser.");
-      return;
-    }
+  const showNote = (msg: string) => {
+    setNote(msg);
+    if (noteTimer.current) clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(() => setNote(null), 3500);
+  };
 
+  const startRecognition = (lang: string, isRetry = false) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
-
-    recognition.lang = language === 'kn' ? 'kn-IN' : 'en-IN';
+    recognition.lang = lang;
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
 
@@ -833,49 +835,88 @@ const VoiceButton = ({
 
     recognition.onresult = (event: SpeechRecognitionEvent) => {
       const transcript = event.results[0][0].transcript;
-      onVoiceResult(transcript);
       setIsListening(false);
+      onVoiceResult(transcript);
     };
 
     recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-      console.error('Speech recognition error:', event.error);
       setIsListening(false);
-      if (event.error !== 'no-speech') {
-        alert("Voice recognition failed. Please try typing instead.");
+      const err = event.error;
+      // Benign — no need to bother the user
+      if (err === 'no-speech' || err === 'aborted') {
+        showNote(language === 'en' ? "Didn't catch that — please try again." : 'ಕೇಳಿಸಲಿಲ್ಲ — ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.');
+        return;
+      }
+      // Kannada not supported by this browser → retry once in English
+      if (err === 'language-not-supported' && !isRetry) {
+        showNote(language === 'en' ? 'Switching to English voice…' : 'ಇಂಗ್ಲಿಷ್ ಧ್ವನಿಗೆ ಬದಲಾಯಿಸಲಾಗುತ್ತಿದೆ…');
+        setTimeout(() => startRecognition('en-IN', true), 300);
+        return;
+      }
+      if (err === 'not-allowed' || err === 'service-not-allowed') {
+        showNote(language === 'en' ? 'Microphone blocked. Allow mic access in your browser.' : 'ಮೈಕ್ರೊಫೋನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ.');
+      } else if (err === 'audio-capture') {
+        showNote(language === 'en' ? 'No microphone found.' : 'ಮೈಕ್ರೊಫೋನ್ ಕಂಡುಬಂದಿಲ್ಲ.');
+      } else if (err === 'network') {
+        showNote(language === 'en' ? 'Voice needs an internet connection.' : 'ಧ್ವನಿಗೆ ಇಂಟರ್ನೆಟ್ ಅಗತ್ಯ.');
+      } else {
+        showNote(language === 'en' ? 'Voice unavailable — please type instead.' : 'ಧ್ವನಿ ಲಭ್ಯವಿಲ್ಲ — ಟೈಪ್ ಮಾಡಿ.');
       }
     };
 
-    recognition.onend = () => {
-      setIsListening(false);
-    };
+    recognition.onend = () => setIsListening(false);
 
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setIsListening(false);
+    }
+  };
+
+  const handleVoiceClick = () => {
+    if (isListening) return;
+    if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+      showNote(language === 'en' ? 'Voice needs Chrome or Edge.' : 'ಧ್ವನಿಗೆ Chrome ಅಥವಾ Edge ಬಳಸಿ.');
+      return;
+    }
+    startRecognition(language === 'kn' ? 'kn-IN' : 'en-IN');
   };
 
   return (
-    <button
-      onClick={handleVoiceClick}
-      disabled={disabled || isListening}
-      style={{
-        backgroundColor: isListening ? '#d32f2f' : '#1976d2',
-        color: 'white',
-        border: 'none',
-        borderRadius: '6px',
-        padding: '14px 24px',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.6 : 1,
-        fontSize: '15px',
-        fontWeight: '600',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        transition: 'all 0.2s',
-        boxShadow: isListening ? '0 0 20px rgba(211,47,47,0.5)' : '0 2px 4px rgba(25,118,210,0.3)'
-      }}
-      title={isListening ? "Listening..." : "Click to speak"}
-    >
-      🎤 {isListening ? 'LISTENING...' : 'VOICE'}
-    </button>
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      {note && (
+        <div style={{
+          position: 'absolute', bottom: '110%', left: 0, whiteSpace: 'nowrap',
+          background: '#37474f', color: '#fff', fontSize: '12px', padding: '6px 10px',
+          borderRadius: '6px', boxShadow: '0 2px 8px rgba(0,0,0,0.25)', zIndex: 10
+        }}>
+          {note}
+        </div>
+      )}
+      <button
+        onClick={handleVoiceClick}
+        disabled={disabled || isListening}
+        style={{
+          backgroundColor: isListening ? '#d32f2f' : '#1976d2',
+          color: 'white',
+          border: 'none',
+          borderRadius: '6px',
+          padding: '14px 24px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.6 : 1,
+          fontSize: '15px',
+          fontWeight: '600',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          transition: 'all 0.2s',
+          boxShadow: isListening ? '0 0 20px rgba(211,47,47,0.5)' : '0 2px 4px rgba(25,118,210,0.3)'
+        }}
+        title={isListening ? 'Listening...' : 'Click to speak'}
+      >
+        🎤 {isListening ? (language === 'en' ? 'LISTENING...' : 'ಆಲಿಸುತ್ತಿದೆ...') : (language === 'en' ? 'VOICE' : 'ಧ್ವನಿ')}
+      </button>
+    </div>
   );
 };
 
