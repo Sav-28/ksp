@@ -141,6 +141,37 @@ export const localizePlace = (value: string | undefined, lang: Lang): string => 
     .join(' ');
 };
 
+// Kannada transliteration for the fixed set of name tokens used in the data.
+const NAME_KN: Record<string, string> = {
+  // First names
+  'ravi': 'ರವಿ', 'suresh': 'ಸುರೇಶ್', 'manjunath': 'ಮಂಜುನಾಥ್', 'prakash': 'ಪ್ರಕಾಶ್',
+  'vijay': 'ವಿಜಯ್', 'anand': 'ಆನಂದ್', 'kiran': 'ಕಿರಣ್', 'naveen': 'ನವೀನ್',
+  'ramesh': 'ರಮೇಶ್', 'mahesh': 'ಮಹೇಶ್', 'santosh': 'ಸಂತೋಷ್', 'girish': 'ಗಿರೀಶ್',
+  'lokesh': 'ಲೋಕೇಶ್', 'dinesh': 'ದಿನೇಶ್', 'harish': 'ಹರೀಶ್', 'umesh': 'ಉಮೇಶ್',
+  'lakshmi': 'ಲಕ್ಷ್ಮಿ', 'geetha': 'ಗೀತಾ', 'sunitha': 'ಸುನೀತಾ', 'pavithra': 'ಪವಿತ್ರಾ',
+  'divya': 'ದಿವ್ಯಾ', 'ananya': 'ಅನನ್ಯಾ', 'kavya': 'ಕಾವ್ಯಾ', 'shruthi': 'ಶ್ರುತಿ',
+  'roopa': 'ರೂಪಾ', 'asha': 'ಆಶಾ', 'deepa': 'ದೀಪಾ', 'nandini': 'ನಂದಿನಿ',
+  'imran': 'ಇಮ್ರಾನ್', 'salman': 'ಸಲ್ಮಾನ್', 'abdul': 'ಅಬ್ದುಲ್', 'fayaz': 'ಫಯಾಜ್',
+  'joseph': 'ಜೋಸೆಫ್', 'thomas': 'ಥಾಮಸ್', 'antony': 'ಆಂಟನಿ', 'david': 'ಡೇವಿಡ್',
+  'rahul': 'ರಾಹುಲ್', 'arjun': 'ಅರ್ಜುನ್', 'vikram': 'ವಿಕ್ರಮ್', 'sandeep': 'ಸಂದೀಪ್',
+  // Last names
+  'gowda': 'ಗೌಡ', 'reddy': 'ರೆಡ್ಡಿ', 'shetty': 'ಶೆಟ್ಟಿ', 'nayak': 'ನಾಯಕ್',
+  'patil': 'ಪಾಟೀಲ್', 'hegde': 'ಹೆಗ್ಡೆ', 'rao': 'ರಾವ್', 'kumar': 'ಕುಮಾರ್',
+  'naik': 'ನಾಯ್ಕ್', 'murthy': 'ಮೂರ್ತಿ', 'acharya': 'ಆಚಾರ್ಯ', 'desai': 'ದೇಸಾಯಿ',
+  'kulkarni': 'ಕುಲಕರ್ಣಿ', 'pai': 'ಪೈ', 'bhat': 'ಭಟ್', 'shastri': 'ಶಾಸ್ತ್ರಿ',
+  'khan': 'ಖಾನ್', 'sheikh': 'ಶೇಖ್', 'pinto': 'ಪಿಂಟೊ', "d'souza": 'ಡಿಸೋಜಾ',
+};
+
+/** Transliterate a person's name into Kannada (token-by-token). */
+export const localizePersonName = (value: string | undefined, lang: Lang): string => {
+  if (!value) return value || '';
+  if (lang === 'en') return value;
+  return value
+    .split(/\s+/)
+    .map((tok) => NAME_KN[tok.toLowerCase()] || tok)
+    .join(' ');
+};
+
 /** Localize a breakdown chart label (could be a district or a crime type). */
 export const localizeLabel = (value: string, lang: Lang): string => {
   if (lang === 'en') return value;

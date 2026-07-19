@@ -13,7 +13,7 @@ import AuditView from '../components/AuditView';
 import { apiFetch, isAuthenticated, getUser, clearAuth, AuthUser } from '../api';
 import {
   localizeCrimeType, localizeDistrict, localizeDescription,
-  localizePlace, localizeLabel, buildAnswer
+  localizePlace, localizeLabel, localizePersonName, buildAnswer
 } from '../locale';
 
 type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'audit';
@@ -476,7 +476,7 @@ const CrimeDetailCard = ({ detail, language }: { detail: CrimeDetail; language: 
       backgroundColor: '#fff', border: '1px solid #e0e0e0', borderRadius: '14px',
       padding: '3px 10px', fontSize: '12px', margin: '2px'
     }}>
-      👤 {p.name}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}
+      👤 {localizePersonName(p.name, language)}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}
     </span>
   );
 
@@ -817,6 +817,7 @@ const VoiceButton = ({
   const [isListening, setIsListening] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const noteTimer = useRef<any>(null);
+  const recognitionRef = useRef<any>(null);
 
   const showNote = (msg: string) => {
     setNote(msg);
@@ -825,8 +826,15 @@ const VoiceButton = ({
   };
 
   const startRecognition = (lang: string, isRetry = false) => {
+    // Abort any lingering instance so we never hold the mic ourselves.
+    if (recognitionRef.current) {
+      try { recognitionRef.current.abort(); } catch { /* ignore */ }
+      recognitionRef.current = null;
+    }
+
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
+    recognitionRef.current = recognition;
     recognition.lang = lang;
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
@@ -864,12 +872,13 @@ const VoiceButton = ({
       }
     };
 
-    recognition.onend = () => setIsListening(false);
+    recognition.onend = () => { setIsListening(false); recognitionRef.current = null; };
 
     try {
       recognition.start();
     } catch {
       setIsListening(false);
+      recognitionRef.current = null;
     }
   };
 

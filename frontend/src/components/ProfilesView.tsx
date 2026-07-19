@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
-import { localizeDistrict, localizeCrimeType } from '../locale';
+import { localizeDistrict, localizeCrimeType, localizePersonName } from '../locale';
 
 interface Offender {
   person_id: number;
@@ -129,7 +129,7 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
                   style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px', borderRadius: 6, cursor: 'pointer', borderBottom: '1px solid #f0f0f0', background: profile?.person_id === o.person_id ? '#e8eaf6' : 'transparent' }}>
                   <div style={{ width: 22, fontWeight: 700, color: '#888' }}>{i + 1}</div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600 }}>👤 {o.name} {o.gang_member && <span title="Gang member">🏴</span>}</div>
+                    <div style={{ fontWeight: 600 }}>👤 {localizePersonName(o.name, language)} {o.gang_member && <span title="Gang member">🏴</span>}</div>
                     <div style={{ fontSize: 12, color: '#666' }}>{localizeDistrict(o.district, language)} · {o.cases} {t('cases', 'ಪ್ರಕರಣ')}</div>
                   </div>
                   <div style={{ textAlign: 'center' }}>
@@ -152,7 +152,7 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
             <div style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#1a237e' }}>👤 {profile.name}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#1a237e' }}>👤 {localizePersonName(profile.name, language)}</div>
                   <div style={{ fontSize: 13, color: '#666' }}>
                     {profile.demographics.age} · {profile.demographics.gender} · {localizeDistrict(profile.demographics.district, language)} · {profile.demographics.occupation}
                   </div>
