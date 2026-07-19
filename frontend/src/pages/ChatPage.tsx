@@ -873,12 +873,41 @@ const VoiceButton = ({
     }
   };
 
-  const handleVoiceClick = () => {
+  const handleVoiceClick = async () => {
     if (isListening) return;
     if (!('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
       showNote(language === 'en' ? 'Voice needs Chrome or Edge.' : 'ಧ್ವನಿಗೆ Chrome ಅಥವಾ Edge ಬಳಸಿ.');
       return;
     }
+
+    // Explicitly request microphone access first. This reliably triggers the
+    // permission prompt and lets us give an accurate reason if it fails.
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // We only needed to confirm access; release the mic immediately.
+        stream.getTracks().forEach((tr) => tr.stop());
+      } catch (err: any) {
+        const name = err?.name || '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+          showNote(language === 'en'
+            ? 'Microphone blocked. Click the 🔒/camera icon in the address bar and allow the mic.'
+            : 'ಮೈಕ್ರೊಫೋನ್ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ. ವಿಳಾಸ ಪಟ್ಟಿಯಲ್ಲಿ ಅನುಮತಿಸಿ.');
+        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError' || name === 'OverconstrainedError') {
+          showNote(language === 'en'
+            ? 'No microphone detected. Connect a mic and check Windows sound settings.'
+            : 'ಮೈಕ್ರೊಫೋನ್ ಕಂಡುಬಂದಿಲ್ಲ. ಮೈಕ್ ಸಂಪರ್ಕಿಸಿ.');
+        } else if (name === 'NotReadableError') {
+          showNote(language === 'en'
+            ? 'Microphone is in use by another app. Close it and try again.'
+            : 'ಮೈಕ್ರೊಫೋನ್ ಬೇರೆ ಅಪ್ಲಿಕೇಶನ್ ಬಳಸುತ್ತಿದೆ.');
+        } else {
+          showNote(language === 'en' ? 'Could not access the microphone.' : 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶಿಸಲಾಗಲಿಲ್ಲ.');
+        }
+        return;
+      }
+    }
+
     startRecognition(language === 'kn' ? 'kn-IN' : 'en-IN');
   };
 
