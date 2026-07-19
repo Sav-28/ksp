@@ -73,3 +73,5 @@ htmlcov/
 
 # Catalyst AppSail vendored dependencies (Linux wheels, regenerated per deploy)
 backend/vendor/
+# React build served by the backend on AppSail (regenerated per deploy)
+backend/static/

@@ -125,11 +125,6 @@ app.include_router(decision_router, prefix="/api")
 app.include_router(briefing_router, prefix="/api")
 
 
-@app.get("/")
-async def root():
-    return {"message": "KSP Crime AI API is running"}
-
-
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
     """Health check endpoint that verifies database connectivity."""
@@ -139,6 +134,35 @@ async def health_check(db: Session = Depends(get_db)):
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+
+
+# ---- Serve the React frontend from the SAME origin (no CORS) ---------------
+# The production build is copied into ./static before deploy. Serving it here
+# means the browser calls /api/... on the same host as the app, so there is no
+# cross-origin preflight (which the Catalyst gateway intercepts). If the build
+# isn't present (pure-API/local runs), we just expose a simple root message.
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
+
+_STATIC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+if os.path.isdir(_STATIC) and os.path.isfile(os.path.join(_STATIC, "index.html")):
+    # CRA emits hashed assets under /static — mount them directly.
+    _assets = os.path.join(_STATIC, "static")
+    if os.path.isdir(_assets):
+        app.mount("/static", StaticFiles(directory=_assets), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve a real file if it exists, else index.html (client-side routing)."""
+        candidate = os.path.join(_STATIC, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_STATIC, "index.html"))
+else:
+    @app.get("/")
+    async def root():
+        return JSONResponse({"message": "KSP Crime AI API is running"})
 
 
 if __name__ == "__main__":

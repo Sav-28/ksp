@@ -3,9 +3,12 @@
  * Handles the API base URL, auth token storage, and authenticated requests.
  */
 
-// API base URL — configurable via environment variable (CRA convention)
+// API base URL — configurable via environment variable (CRA convention).
+// An empty string means "same origin" (used when the backend also serves the
+// frontend build, e.g. on Catalyst AppSail — avoids all cross-origin/CORS).
+// `??` (not `||`) so an intentionally-empty value is preserved.
 export const API_BASE =
-  process.env.REACT_APP_API_BASE || 'http://localhost:8004';
+  process.env.REACT_APP_API_BASE ?? 'http://localhost:8004';
 
 const TOKEN_KEY = 'ksp_token';
 const USER_KEY = 'ksp_user';
