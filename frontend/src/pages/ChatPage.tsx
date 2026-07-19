@@ -343,7 +343,7 @@ const GovHeader = ({
 };
 
 // A single crime case card — scannable layout with accused name + status
-const CrimeCaseCard = ({ crime, index, language }: { crime: CrimeRecord; index: number; language: 'en' | 'kn' }) => {
+const CrimeCaseCard = ({ crime, index, language, onClick }: { crime: CrimeRecord; index: number; language: 'en' | 'kn'; onClick?: (fir: string) => void }) => {
   const accent = accentFor(crime.crime_type);
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
   const accused = crime.accused || [];
@@ -351,17 +351,26 @@ const CrimeCaseCard = ({ crime, index, language }: { crime: CrimeRecord; index: 
     ? (accused.length > 2 ? `${accused.slice(0, 2).join(', ')} +${accused.length - 2}` : accused.join(', '))
     : t('Unknown', 'ಅಜ್ಞಾತ');
   const st = statusStyle(crime.investigation_status);
+  const clickable = !!(onClick && crime.fir_number);
 
   return (
-    <div style={{
+    <div
+      onClick={() => clickable && onClick!(crime.fir_number!)}
+      title={clickable ? t('Click for full case details', 'ಪೂರ್ಣ ವಿವರಗಳಿಗೆ ಕ್ಲಿಕ್ ಮಾಡಿ') : undefined}
+      style={{
       backgroundColor: '#ffffff',
       border: '1px solid #e6e6e6',
       borderLeft: `5px solid ${accent}`,
       borderRadius: '8px',
       padding: '12px 14px',
       marginBottom: '10px',
-      boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
-    }}>
+      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+      cursor: clickable ? 'pointer' : 'default',
+      transition: 'box-shadow 0.15s',
+    }}
+    onMouseEnter={(e) => { if (clickable) e.currentTarget.style.boxShadow = '0 2px 10px rgba(26,35,126,0.2)'; }}
+    onMouseLeave={(e) => { if (clickable) e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.08)'; }}
+    >
       {/* Header: index + crime type + status pill + FIR */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -399,6 +408,12 @@ const CrimeCaseCard = ({ crime, index, language }: { crime: CrimeRecord; index: 
       {crime.description && (
         <div style={{ fontSize: '12.5px', color: '#777', marginTop: '6px' }}>
           📝 {localizeDescription(crime.description, language)}
+        </div>
+      )}
+
+      {clickable && (
+        <div style={{ fontSize: '11px', color: '#1976d2', fontWeight: 600, marginTop: '6px' }}>
+          {t('View full case details ›', 'ಪೂರ್ಣ ವಿವರಗಳನ್ನು ವೀಕ್ಷಿಸಿ ›')}
         </div>
       )}
     </div>
@@ -578,7 +593,7 @@ const EvidencePanel = ({ evidence, language }: { evidence: Record<string, any>; 
 };
 
 // Government-styled message bubble
-const MessageBubble = ({ message, language }: { message: ChatMessage; language: 'en' | 'kn' }) => {
+const MessageBubble = ({ message, language, onCrimeClick }: { message: ChatMessage; language: 'en' | 'kn'; onCrimeClick?: (fir: string) => void }) => {
   const hasResults = message.results && message.results.length > 0;
   const hasBreakdown = message.breakdown && message.breakdown.length > 0;
   const isRich = !message.isUser && (hasResults || hasBreakdown);
@@ -658,7 +673,7 @@ const MessageBubble = ({ message, language }: { message: ChatMessage; language: 
             {hasResults && (
               <div style={{ marginTop: '4px' }}>
                 {message.results!.map((crime, idx) => (
-                  <CrimeCaseCard key={crime.id ?? idx} crime={crime} index={idx} language={language} />
+                  <CrimeCaseCard key={crime.id ?? idx} crime={crime} index={idx} language={language} onClick={onCrimeClick} />
                 ))}
                 <div style={{ fontSize: '12px', color: '#888', textAlign: 'center', marginTop: '4px' }}>
                   ✅ {message.results!.length} {language === 'en' ? 'record(s) shown' : 'ದಾಖಲೆ(ಗಳು) ತೋರಿಸಲಾಗಿದೆ'}
@@ -1042,6 +1057,28 @@ const ChatPage: React.FC = () => {
     handleSubmit(transcript);
   };
 
+  // Click a crime card → fetch and append its full FIR detail
+  const showFirDetail = async (fir: string) => {
+    if (!fir) return;
+    setMessages(prev => [...prev, { text: `Loading ${fir}...`, isUser: false, loading: true }]);
+    try {
+      const res = await apiFetch(`/api/crime/${fir}`);
+      const detail = await res.json();
+      setMessages(prev => prev.slice(0, -1));
+      setMessages(prev => [...prev, {
+        text: `📁 ${currentLanguage === 'en' ? 'Full details for' : 'ಪೂರ್ಣ ವಿವರಗಳು'} ${fir}:`,
+        isUser: false,
+        intent: 'FIR_DETAIL',
+        detail,
+      }]);
+      conversationContext.current = { ...(conversationContext.current || {}), last_fir: fir };
+    } catch (e: any) {
+      setMessages(prev => prev.slice(0, -1));
+      if (e.message === 'UNAUTHORIZED') { handleSessionExpired(); return; }
+      setMessages(prev => [...prev, { text: `Could not load ${fir}.`, isUser: false }]);
+    }
+  };
+
   // Export the conversation as a PDF (via the browser's print-to-PDF, which
   // renders Kannada correctly (via html2canvas) and downloads directly — no
   // new tab, no print dialog.
@@ -1274,7 +1311,7 @@ const ChatPage: React.FC = () => {
           backgroundColor: '#fafafa'
         }}>
           {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} language={currentLanguage} />
+            <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} />
           ))}
           <div ref={messagesEndRef} />
         </div>
