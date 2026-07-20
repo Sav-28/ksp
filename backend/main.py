@@ -33,6 +33,7 @@ from src.api.routes.hotspots import router as hotspots_router
 from src.api.routes.insights import router as insights_router
 from src.api.routes.decision_support import router as decision_router
 from src.api.routes.briefing import router as briefing_router
+from src.api.routes.casework import router as casework_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -140,6 +141,7 @@ app.include_router(hotspots_router, prefix="/api")
 app.include_router(insights_router, prefix="/api")
 app.include_router(decision_router, prefix="/api")
 app.include_router(briefing_router, prefix="/api")
+app.include_router(casework_router, prefix="/api")
 
 
 @app.get("/health")
