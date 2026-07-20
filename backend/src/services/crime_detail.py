@@ -7,6 +7,41 @@ from typing import Dict, Any, Optional, List
 from sqlalchemy.orm import Session
 
 from src.database.models import Crime, FIRDetails, CasePerson, Person
+from src.database import models_fir as F
+
+
+def _official_police_details(db: Session, crime_no: str) -> Optional[Dict[str, Any]]:
+    """Pull the police/court details for a case from the official FIR schema
+    (joined off the CrimeNo, which equals the crime's fir_number)."""
+    cm = db.query(F.CaseMaster).filter(F.CaseMaster.CrimeNo == crime_no).first()
+    if not cm:
+        return None
+    emp = db.get(F.Employee, cm.PolicePersonID) if cm.PolicePersonID else None
+    rank = db.get(F.Rank, emp.RankID) if emp and emp.RankID else None
+    desig = db.get(F.Designation, emp.DesignationID) if emp and emp.DesignationID else None
+    unit = db.get(F.Unit, cm.PoliceStationID) if cm.PoliceStationID else None
+    court = db.get(F.Court, cm.CourtID) if cm.CourtID else None
+    grav = db.get(F.GravityOffence, cm.GravityOffenceID) if cm.GravityOffenceID else None
+    cat = db.get(F.CaseCategory, cm.CaseCategoryID) if cm.CaseCategoryID else None
+    st = db.get(F.CaseStatusMaster, cm.CaseStatusID) if cm.CaseStatusID else None
+    occ = db.query(F.Inv_OccuranceTime).filter(
+        F.Inv_OccuranceTime.CaseMasterID == cm.CaseMasterID).first()
+    return {
+        "crime_no": cm.CrimeNo,
+        "case_no": cm.CaseNo,
+        "registered_date": str(cm.CrimeRegisteredDate) if cm.CrimeRegisteredDate else None,
+        "category": cat.LookupValue if cat else None,
+        "gravity": grav.LookupValue if grav else None,
+        "case_status": st.CaseStatusName if st else None,
+        "police_station": unit.UnitName if unit else None,
+        "officer": emp.FirstName if emp else None,
+        "officer_rank": rank.RankName if rank else None,
+        "officer_designation": desig.DesignationName if desig else None,
+        "court": court.CourtName if court else None,
+        "incident_from": str(occ.IncidentFromDate) if occ and occ.IncidentFromDate else None,
+        "incident_to": str(occ.IncidentToDate) if occ and occ.IncidentToDate else None,
+        "info_received": str(occ.InfoReceivedPSDate) if occ and occ.InfoReceivedPSDate else None,
+    }
 
 
 def _person_brief(p: Person) -> Dict[str, Any]:
@@ -55,4 +90,6 @@ def get_crime_detail(db: Session, fir_number: str) -> Optional[Dict[str, Any]]:
         "accused": people_by_role.get("accused", []),
         "victims": people_by_role.get("victim", []),
         "witnesses": people_by_role.get("witness", []),
+        # Police station / officer / court from the official FIR schema.
+        "police": _official_police_details(db, crime.fir_number),
     }

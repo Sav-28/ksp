@@ -10,13 +10,14 @@ import ProfilesView from '../components/ProfilesView';
 import FinanceView from '../components/FinanceView';
 import ForecastView from '../components/ForecastView';
 import AuditView from '../components/AuditView';
+import CaseInvestigationView from '../components/CaseInvestigationView';
 import { apiFetch, isAuthenticated, getUser, clearAuth, AuthUser } from '../api';
 import {
   localizeCrimeType, localizeDistrict, localizeDescription,
   localizePlace, localizeLabel, localizePersonName, buildAnswer
 } from '../locale';
 
-type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'audit';
+type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'investigation' | 'audit';
 
 // Shared data types
 interface CrimeRecord {
@@ -128,7 +129,6 @@ const statusStyle = (s?: string) => STATUS_COLOR[(s || '').toLowerCase()] || { b
 // Government-styled header component
 const GovHeader = ({ 
   onLanguageChange, 
-  onShowRecords,
   onNavigate,
   onLogout,
   user,
@@ -136,7 +136,6 @@ const GovHeader = ({
   currentLanguage 
 }: { 
   onLanguageChange: (lang: 'en' | 'kn') => void;
-  onShowRecords: () => void;
   onNavigate: (view: ViewType) => void;
   onLogout: () => void;
   user: AuthUser | null;
@@ -145,9 +144,8 @@ const GovHeader = ({
 }) => {
   const handleMenuClick = (menuItem: string) => {
     console.log(`Menu clicked: ${menuItem}`);
-    if (menuItem === 'RECORDS') {
-      onNavigate('chat');
-      onShowRecords();
+    if (menuItem === 'CASE INVESTIGATION') {
+      onNavigate('investigation');
     } else if (menuItem === 'DASHBOARD') {
       onNavigate('dashboard');
     } else if (menuItem === 'NETWORK') {
@@ -336,10 +334,10 @@ const GovHeader = ({
         boxShadow: '0 2px 6px rgba(0,0,0,0.15)'
       }}>
         {(currentLanguage === 'en' 
-          ? ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'RECORDS', ...(user?.role === 'admin' ? ['AUDIT'] : [])]
-          : ['AI ಸಹಾಯಕ', 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್', 'ಜಾಲ', 'ನಕ್ಷೆ', 'ಒಳನೋಟ', 'ಪ್ರೊಫೈಲ್', 'ಹಣಕಾಸು', 'ಮುನ್ಸೂಚನೆ', 'ದಾಖಲೆಗಳು', ...(user?.role === 'admin' ? ['ಲೆಕ್ಕಪರಿಶೋಧನೆ'] : [])]
+          ? ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', ...(user?.role === 'admin' ? ['AUDIT'] : [])]
+          : ['AI ಸಹಾಯಕ', 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್', 'ಜಾಲ', 'ನಕ್ಷೆ', 'ಒಳನೋಟ', 'ಪ್ರೊಫೈಲ್', 'ಹಣಕಾಸು', 'ಮುನ್ಸೂಚನೆ', 'ಪ್ರಕರಣ ತನಿಖೆ', ...(user?.role === 'admin' ? ['ಲೆಕ್ಕಪರಿಶೋಧನೆ'] : [])]
         ).map((item, idx) => {
-          const baseItems = ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'RECORDS', ...(user?.role === 'admin' ? ['AUDIT'] : [])];
+          const baseItems = ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', ...(user?.role === 'admin' ? ['AUDIT'] : [])];
           const englishItem = baseItems[idx];
           // Determine if this menu item is active based on current view
           const isActive = 
@@ -351,6 +349,7 @@ const GovHeader = ({
             (currentView === 'profiles' && englishItem === 'PROFILES') ||
             (currentView === 'finance' && englishItem === 'FINANCE') ||
             (currentView === 'forecast' && englishItem === 'FORECAST') ||
+            (currentView === 'investigation' && englishItem === 'CASE INVESTIGATION') ||
             (currentView === 'audit' && englishItem === 'AUDIT');
           return (
             <div
@@ -1089,45 +1088,6 @@ const ChatPage: React.FC = () => {
     setCurrentView('chat');
   };
 
-  // Function to show all records
-  const showAllRecords = async () => {
-    setMessages(prev => [...prev, { text: 'Fetching all records...', isUser: false, loading: true }]);
-    
-    try {
-      const response = await apiFetch('/api/chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          text: 'Show all crimes in Karnataka',
-          language: 'en'
-        })
-      });
-
-      const data = await response.json();
-      setMessages(prev => prev.slice(0, -1));
-
-      const results: CrimeRecord[] = data.results || [];
-      setMessages(prev => [...prev, {
-        text: currentLanguage === 'kn'
-          ? `📊 ಎಲ್ಲಾ ಅಪರಾಧ ದಾಖಲೆಗಳು — ಒಟ್ಟು ${results.length}`
-          : `📊 All Crime Records — ${results.length} total`,
-        isUser: false,
-        intent: data.intent,
-        entities: data.entities,
-        results
-      }]);
-    } catch (error: any) {
-      setMessages(prev => prev.slice(0, -1));
-      if (error.message === 'UNAUTHORIZED') {
-        handleSessionExpired();
-        return;
-      }
-      setMessages(prev => [...prev, { 
-        text: "Error fetching records. Please try: 'Show crimes in Bengaluru'", 
-        isUser: false 
-      }]);
-    }
-  };
-
   // Function to switch language
   const switchLanguage = (lang: 'en' | 'kn') => {
     setCurrentLanguage(lang);
@@ -1424,7 +1384,6 @@ const ChatPage: React.FC = () => {
     }}>
       <GovHeader 
         onLanguageChange={switchLanguage}
-        onShowRecords={showAllRecords}
         onNavigate={setCurrentView}
         onLogout={handleLogout}
         user={user}
@@ -1458,6 +1417,8 @@ const ChatPage: React.FC = () => {
             ? (currentLanguage === 'en' ? ' Financial Analysis' : ' ಆರ್ಥಿಕ ವಿಶ್ಲೇಷಣೆ')
             : currentView === 'forecast'
             ? (currentLanguage === 'en' ? ' Forecasting' : ' ಮುನ್ಸೂಚನೆ')
+            : currentView === 'investigation'
+            ? (currentLanguage === 'en' ? ' Case Investigation' : ' ಪ್ರಕರಣ ತನಿಖೆ')
             : currentView === 'audit'
             ? (currentLanguage === 'en' ? ' Audit Log' : ' ಲೆಕ್ಕಪರಿಶೋಧನೆ')
             : (currentLanguage === 'en' ? ' AI Assistant' : ' AI ಸಹಾಯಕ')}
@@ -1510,6 +1471,13 @@ const ChatPage: React.FC = () => {
       {currentView === 'forecast' && (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
           <ForecastView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Case investigation view — look up a full case by Crime No (FIR) */}
+      {currentView === 'investigation' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <CaseInvestigationView language={currentLanguage} />
         </div>
       )}
 

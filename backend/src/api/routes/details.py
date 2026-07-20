@@ -36,40 +36,14 @@ async def get_crime_detail(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Full detail for a single FIR: incident, investigation, and people."""
-    crime = db.query(Crime).filter(Crime.fir_number == fir_number).first()
-    if not crime:
-        raise HTTPException(status_code=404, detail=f"FIR {fir_number} not found")
-
-    fir = db.query(FIRDetails).filter(FIRDetails.crime_id == crime.id).first()
-    links = db.query(CasePerson).filter(CasePerson.crime_id == crime.id).all()
-
-    people_by_role: Dict[str, List[Dict[str, Any]]] = {}
-    for link in links:
-        person = db.query(Person).get(link.person_id)
-        if person:
-            people_by_role.setdefault(link.role, []).append(_person_brief(person))
-
-    return {
-        "fir_number": crime.fir_number,
-        "crime_type": crime.crime_type,
-        "date_occurred": str(crime.date_occurred),
-        "district": crime.district,
-        "police_station": crime.police_station,
-        "description": crime.description,
-        "location": {"latitude": crime.latitude, "longitude": crime.longitude},
-        "investigation": {
-            "status": fir.investigation_status if fir else None,
-            "officer": fir.investigating_officer if fir else None,
-            "ipc_sections": fir.ipc_sections if fir else None,
-            "arrest_made": fir.arrest_made if fir else None,
-            "outcome": fir.case_outcome if fir else None,
-            "court_status": fir.court_status if fir else None,
-        } if fir else None,
-        "accused": people_by_role.get("accused", []),
-        "victims": people_by_role.get("victim", []),
-        "witnesses": people_by_role.get("witness", []),
-    }
+    """Full detail for a single FIR: incident, investigation, people, and the
+    official police/court details. Delegates to the shared service so the REST
+    endpoint and the conversational follow-ups return identical, complete data."""
+    from src.services.crime_detail import get_crime_detail as build_detail
+    detail = build_detail(db, fir_number)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"Case {fir_number} not found")
+    return detail
 
 
 @router.get("/person/{person_id}")
