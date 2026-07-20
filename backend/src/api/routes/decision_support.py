@@ -214,7 +214,7 @@ async def forecast(
     rows = db.execute(text(
         """
         SELECT strftime('%Y-%m', date_occurred) AS m, COUNT(*) AS c
-        FROM crimes WHERE date_occurred IS NOT NULL
+        FROM v_crimes WHERE date_occurred IS NOT NULL
         GROUP BY m ORDER BY m ASC
         """
     )).fetchall()
@@ -236,7 +236,7 @@ async def forecast(
     def dist_counts(start, end):
         r = db.execute(text(
             """
-            SELECT district AS d, COUNT(*) AS c FROM crimes
+            SELECT district AS d, COUNT(*) AS c FROM v_crimes
             WHERE date_occurred >= :s AND date_occurred < :e AND district IS NOT NULL
             GROUP BY district
             """

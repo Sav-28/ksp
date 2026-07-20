@@ -123,7 +123,7 @@ async def get_mo_patterns(
     rows = db.execute(text(
         """
         SELECT crime_type AS ct, description AS descr, COUNT(*) AS cnt
-        FROM crimes
+        FROM v_crimes
         WHERE crime_type IS NOT NULL
         GROUP BY crime_type, description
         ORDER BY crime_type, cnt DESC
