@@ -98,6 +98,23 @@ def on_startup():
         except Exception as e:
             logging.warning(f"Auto-seed skipped/failed: {e}")
 
+        # Project the analytics data into the official FIR schema (system of
+        # record). Runs when the official CaseMaster table is empty but source
+        # crimes exist — keeps the deployed DB schema-compliant automatically.
+        try:
+            from src.database.session import SessionLocal
+            from src.database.models import Crime
+            from src.database.models_fir import CaseMaster
+            db = SessionLocal()
+            needs_projection = db.query(Crime).count() > 0 and db.query(CaseMaster).count() == 0
+            db.close()
+            if needs_projection:
+                logging.info("Projecting data into official FIR schema...")
+                import migrate_to_fir_schema
+                migrate_to_fir_schema.main()
+        except Exception as e:
+            logging.warning(f"FIR-schema projection skipped/failed: {e}")
+
     # Pre-load the Ollama model in the background so the first query is fast.
     if os.getenv("KSP_NLP_PROVIDER", "ollama").lower() == "ollama":
         import threading

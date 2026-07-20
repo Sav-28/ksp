@@ -44,6 +44,13 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def create_tables():
-    """Create all database tables."""
+    """Create all database tables (analytics schema + official FIR schema)."""
     from .models import Base
     Base.metadata.create_all(bind=engine)
+    # Official Karnataka Police FIR schema (system-of-record tables).
+    try:
+        from .models_fir import FIRBase
+        FIRBase.metadata.create_all(bind=engine)
+    except Exception:
+        # Official schema is additive; never block startup if it can't build.
+        pass
