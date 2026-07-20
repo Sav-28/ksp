@@ -15,16 +15,43 @@ Run:  python migrate_to_fir_schema.py
 """
 import sys
 import os
+import random
 sys.path.insert(0, os.path.dirname(__file__))
 
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from src.database.session import SessionLocal, create_tables, engine
 from src.database.models import Crime, FIRDetails, CasePerson, Person
 from src.database import models_fir as F
 
+random.seed(2025)  # deterministic generation
+
 # --- Reference metadata ----------------------------------------------------
 KARNATAKA_STATE_ID = 1
+INDIAN_NATIONALITY_ID = 1
+
+# Police ranks (RankID, name, hierarchy — lower = more senior)
+RANKS = [
+    "Director General of Police", "Inspector General of Police",
+    "Superintendent of Police", "Deputy Superintendent of Police",
+    "Police Inspector", "Police Sub-Inspector", "Head Constable", "Police Constable",
+]
+# Ranks an investigating/registering officer realistically holds
+IO_RANKS = ["Police Inspector", "Police Sub-Inspector"]
+DESIGNATIONS = [
+    "Station House Officer", "Investigating Officer", "Circle Inspector",
+    "Additional Superintendent", "Beat Officer",
+]
+BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"]  # BloodGroupID = index+1
+RELIGIONS = ["Hindu", "Muslim", "Christian", "Jain", "Sikh", "Buddhist", "Other"]
+RELIGION_WEIGHTS = [72, 13, 5, 4, 2, 2, 2]
+# Caste category (neutral reference lookup, as recorded on a standard FIR)
+CASTES = ["General", "OBC", "SC", "ST", "Other"]
+CASTE_WEIGHTS = [30, 40, 18, 8, 4]
+UNIT_TYPES = [
+    ("Police Station", "City", 3), ("Circle Office", "District", 2),
+    ("District Headquarters", "District", 1), ("City Commissionerate", "City", 1),
+]
 
 # crime_type -> (IPC section, major crime head/group)
 CRIME_META = {
@@ -82,7 +109,8 @@ def main():
                        NationalityID=1, Active=True))
 
         # --- 2. Lookup masters (categories, gravity, status) ---------------
-        db.add(F.CaseCategory(CaseCategoryID=1, LookupValue="FIR"))
+        for cid, val in [(1, "FIR"), (3, "UDR"), (4, "PAR"), (8, "Zero FIR")]:
+            db.add(F.CaseCategory(CaseCategoryID=cid, LookupValue=val))
         db.add(F.GravityOffence(GravityOffenceID=1, LookupValue="Heinous"))
         db.add(F.GravityOffence(GravityOffenceID=2, LookupValue="Non-Heinous"))
 
@@ -103,22 +131,34 @@ def main():
             db.add(F.District(DistrictID=i, DistrictName=name,
                               StateID=KARNATAKA_STATE_ID, Active=True))
 
-        db.add(F.UnitType(UnitTypeID=1, UnitTypeName="Police Station",
-                          CityDistState="City", Hierarchy=3, Active=True))
+        for i, (name, level, hier) in enumerate(UNIT_TYPES, start=1):
+            db.add(F.UnitType(UnitTypeID=i, UnitTypeName=name,
+                              CityDistState=level, Hierarchy=hier, Active=True))
 
         unit_id = {}
+        units_by_district = {}
         for i, (dist, ps) in enumerate(sorted({
             (c.district, c.police_station) for c in crimes if c.police_station
         }), start=1):
             unit_id[(dist, ps)] = i
-            db.add(F.Unit(UnitID=i, UnitName=ps, TypeID=1, StateID=KARNATAKA_STATE_ID,
+            units_by_district.setdefault(district_id.get(dist), []).append(i)
+            db.add(F.Unit(UnitID=i, UnitName=f"{ps} Police Station", TypeID=1,
+                          ParentUnit=None, NationalityID=INDIAN_NATIONALITY_ID,
+                          StateID=KARNATAKA_STATE_ID,
                           DistrictID=district_id.get(dist), Active=True))
 
         # --- 4. Ranks / Designations / Employees (investigating officers) --
-        db.add(F.Rank(RankID=1, RankName="Inspector", Hierarchy=3, Active=True))
-        db.add(F.Designation(DesignationID=1, DesignationName="Investigating Officer",
-                             Active=True, SortOrder=1))
+        rank_id = {}
+        for i, name in enumerate(RANKS, start=1):
+            rank_id[name] = i
+            db.add(F.Rank(RankID=i, RankName=name, Hierarchy=i, Active=True))
+        desig_id = {}
+        for i, name in enumerate(DESIGNATIONS, start=1):
+            desig_id[name] = i
+            db.add(F.Designation(DesignationID=i, DesignationName=name,
+                                 Active=True, SortOrder=i))
 
+        all_district_ids = list(district_id.values()) or [1]
         officers = sorted({
             (db.query(FIRDetails).filter(FIRDetails.crime_id == c.id).first()
              or FIRDetails()).investigating_officer or "Unassigned"
@@ -127,9 +167,26 @@ def main():
         employee_id = {}
         for i, off in enumerate(officers, start=1):
             employee_id[off] = i
-            db.add(F.Employee(EmployeeID=i, DistrictID=1, UnitID=1, RankID=1,
-                              DesignationID=1, KGID=f"KGID{i:05d}", FirstName=off,
-                              GenderID=1))
+            # Officer names look like "Insp. Sunitha Reddy" — infer gender loosely.
+            female = any(fn in off for fn in
+                         ("Sunitha", "Kavya", "Roopa", "Deepa", "Geetha", "Divya", "Asha"))
+            did_e = random.choice(all_district_ids)
+            uid_e = random.choice(units_by_district.get(did_e) or [1])
+            # Age 32-58 → DOB; appointed ~age 24.
+            age = random.randint(32, 58)
+            dob = date(date.today().year - age, random.randint(1, 12), random.randint(1, 28))
+            appt = date(dob.year + 24, random.randint(1, 12), random.randint(1, 28))
+            db.add(F.Employee(
+                EmployeeID=i, DistrictID=did_e, UnitID=uid_e,
+                RankID=rank_id[random.choice(IO_RANKS)],
+                DesignationID=desig_id[random.choice(
+                    ["Station House Officer", "Investigating Officer", "Circle Inspector"])],
+                KGID=f"KA{random.randint(1980, 2018)}{i:04d}",
+                FirstName=off.replace("Insp. ", ""),
+                EmployeeDOB=dob, GenderID=2 if female else 1,
+                BloodGroupID=random.randint(1, 8),
+                PhysicallyChallenged=(random.random() < 0.02),
+                AppointmentDate=appt))
 
         # --- 5. Crime heads / sub-heads + Acts / Sections ------------------
         heads = sorted({grp for (_, grp) in CRIME_META.values()})
@@ -162,15 +219,27 @@ def main():
         for i, occ in enumerate(occupations, start=1):
             occ_id[occ] = i
             db.add(F.OccupationMaster(OccupationID=i, OccupationName=occ))
-        db.add(F.ReligionMaster(ReligionID=1, ReligionName="Not Recorded"))
-        db.add(F.CasteMaster(caste_master_id=1, caste_master_name="Not Recorded"))
+        religion_ids = []
+        for i, rel in enumerate(RELIGIONS, start=1):
+            religion_ids.append(i)
+            db.add(F.ReligionMaster(ReligionID=i, ReligionName=rel))
+        caste_ids = []
+        for i, cst in enumerate(CASTES, start=1):
+            caste_ids.append(i)
+            db.add(F.CasteMaster(caste_master_id=i, caste_master_name=cst))
 
-        # --- 7. Courts (one per district) ----------------------------------
+        # --- 7. Courts (District & Sessions + JMFC per district) -----------
         court_id = {}
+        cc = 0
         for name, did in district_id.items():
-            cid = did
-            court_id[name] = cid
-            db.add(F.Court(CourtID=cid, CourtName=f"{name} District Court",
+            cc += 1
+            court_id[name] = cc
+            db.add(F.Court(CourtID=cc, CourtName=f"{name} District & Sessions Court",
+                           DistrictID=did, StateID=KARNATAKA_STATE_ID, Active=True))
+        # A JMFC (magistrate) court per district too — realistic court hierarchy.
+        for name, did in district_id.items():
+            cc += 1
+            db.add(F.Court(CourtID=cc, CourtName=f"JMFC Court, {name}",
                            DistrictID=did, StateID=KARNATAKA_STATE_ID, Active=True))
         db.commit()
 
@@ -212,17 +281,27 @@ def main():
                 CaseStatusID=status_id.get(status),
                 CourtID=court_id.get(c.district),
             ))
+            # Occurrence window: incident happened over a short span, and the
+            # police station was informed shortly after (realistic timeline).
+            occ_from = None
+            occ_to = None
+            info_recv = None
+            if c.date_occurred:
+                occ_from = datetime.combine(c.date_occurred, datetime.min.time()) + \
+                    timedelta(hours=random.randint(0, 22), minutes=random.choice([0, 15, 30, 45]))
+                occ_to = occ_from + timedelta(minutes=random.randint(15, 240))
+                info_recv = occ_to + timedelta(hours=random.randint(1, 72))
             db.add(F.Inv_OccuranceTime(
                 CaseMasterID=cm_id,
-                IncidentFromDate=datetime.combine(c.date_occurred, datetime.min.time())
-                if c.date_occurred else None,
-                IncidentToDate=None, InfoReceivedPSDate=None,
+                IncidentFromDate=occ_from, IncidentToDate=occ_to,
+                InfoReceivedPSDate=info_recv,
                 latitude=c.latitude, longitude=c.longitude, BriefFacts=c.description,
             ))
 
             # People linked to this case, by role
             links = db.query(CasePerson).filter(CasePerson.crime_id == c.id).all()
             acc_seq = 0
+            accused_objs = []
             for link in links:
                 p = db.query(Person).get(link.person_id)
                 if not p:
@@ -230,15 +309,20 @@ def main():
                 gid = GENDER_ID.get(p.gender, 1)
                 if link.role == "accused":
                     acc_seq += 1
-                    db.add(F.Accused(CaseMasterID=cm_id, AccusedName=p.full_name,
-                                     AgeYear=p.age, GenderID=gid, PersonID=f"A{acc_seq}"))
+                    a = F.Accused(CaseMasterID=cm_id, AccusedName=p.full_name,
+                                  AgeYear=p.age, GenderID=gid, PersonID=f"A{acc_seq}")
+                    db.add(a)
+                    accused_objs.append(a)
                 elif link.role == "victim":
                     db.add(F.Victim(CaseMasterID=cm_id, VictimName=p.full_name,
-                                    AgeYear=p.age, GenderID=gid, VictimPolice="0"))
+                                    AgeYear=p.age, GenderID=gid,
+                                    VictimPolice="1" if random.random() < 0.03 else "0"))
                 elif link.role in ("complainant", "witness"):
                     db.add(F.ComplainantDetails(
                         CaseMasterID=cm_id, ComplainantName=p.full_name, AgeYear=p.age,
-                        OccupationID=occ_id.get(p.occupation), ReligionID=1, CasteID=1,
+                        OccupationID=occ_id.get(p.occupation),
+                        ReligionID=random.choices(religion_ids, weights=RELIGION_WEIGHTS)[0],
+                        CasteID=random.choices(caste_ids, weights=CASTE_WEIGHTS)[0],
                         GenderID=gid))
 
             # Act-section association from FIRDetails.ipc_sections
@@ -252,14 +336,25 @@ def main():
             # Arrest + chargesheet where applicable
             if fir and fir.arrest_made:
                 arrest_counter += 1
+                # Roughly 1 in 8 events is a voluntary surrender, else an arrest.
+                as_type = 2 if random.random() < 0.12 else 1
                 db.add(F.ArrestSurrender(
                     ArrestSurrenderID=arrest_counter, CaseMasterID=cm_id,
-                    ArrestSurrenderTypeID=1, ArrestSurrenderDate=fir.filed_date or c.date_occurred,
+                    ArrestSurrenderTypeID=as_type,
+                    ArrestSurrenderDate=fir.filed_date or c.date_occurred,
                     ArrestSurrenderStateId=KARNATAKA_STATE_ID,
                     ArrestSurrenderDistrictId=did or None, PoliceStationID=uid or None,
                     IOID=employee_id.get((fir.investigating_officer or "Unassigned")),
                     CourtID=court_id.get(c.district), IsAccused=True,
                     IsComplainantAccused=False))
+                # Link every accused of this case to the arrest event via the
+                # official junction (one arrest event → multiple accused).
+                if accused_objs:
+                    db.flush()  # assign AccusedMasterIDs
+                    for a in accused_objs:
+                        db.add(F.inv_arrestsurrenderaccused(
+                            ArrestSurrenderID=arrest_counter,
+                            AccusedMasterID=a.AccusedMasterID))
             if fir and status in CS_TYPE:
                 cs_counter += 1
                 db.add(F.ChargesheetDetails(
@@ -281,10 +376,16 @@ def main():
             ("Accused", F.Accused), ("Victim", F.Victim),
             ("ComplainantDetails", F.ComplainantDetails),
             ("ActSectionAssociation", F.ActSectionAssociation),
-            ("ArrestSurrender", F.ArrestSurrender), ("ChargesheetDetails", F.ChargesheetDetails),
-            ("District", F.District), ("Unit", F.Unit), ("Employee", F.Employee),
+            ("ArrestSurrender", F.ArrestSurrender),
+            ("inv_arrestsurrenderaccused", F.inv_arrestsurrenderaccused),
+            ("ChargesheetDetails", F.ChargesheetDetails),
+            ("District", F.District), ("Unit", F.Unit), ("UnitType", F.UnitType),
+            ("Employee", F.Employee), ("Rank", F.Rank), ("Designation", F.Designation),
             ("CrimeHead", F.CrimeHead), ("CrimeSubHead", F.CrimeSubHead),
             ("Section", F.Section), ("Court", F.Court),
+            ("CaseCategory", F.CaseCategory), ("GravityOffence", F.GravityOffence),
+            ("ReligionMaster", F.ReligionMaster), ("CasteMaster", F.CasteMaster),
+            ("OccupationMaster", F.OccupationMaster),
         ]:
             print(f"  {label:22}: {db.query(model).count()}")
         print("=" * 60)
