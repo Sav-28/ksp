@@ -175,7 +175,10 @@ def main():
         serial_by_ps = {}
         cs_counter = 0
         arrest_counter = 0
-        for cm_id, c in enumerate(crimes, start=1):
+        # CaseMasterID is aligned to the analytics crime.id so the official
+        # schema and the intelligence layer share one id space (clean bridge).
+        for c in crimes:
+            cm_id = c.id
             fir = db.query(FIRDetails).filter(FIRDetails.crime_id == c.id).first()
             year = c.date_occurred.year if c.date_occurred else 2026
             uid = unit_id.get((c.district, c.police_station), 0)
