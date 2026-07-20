@@ -24,7 +24,13 @@ patterns, tracing financial trails, and forecasting emerging crime.
 | 7 | Financial Crime & Transaction Link Analysis | ✅ | FINANCE tab |
 | 8 | Crime Forecasting & Early Warning | ✅ | FORECAST tab |
 | 9 | Explainable AI & Transparent Analytics | ✅ | "Why this answer?" on every reply |
-| 10 | Secure Role-Based Access & Governance | ✅ | auth + AUDIT tab (admin) |
+| 10 | Secure Role-Based Access & Governance | ✅ | 4 roles + AUDIT tab (supervisor) |
+
+The database implements the **official Karnataka Police FIR schema** (28 normalized
+tables — `CaseMaster`, `Victim`, `Accused`, `ComplainantDetails`, `ArrestSurrender`,
+`ChargesheetDetails`, `Act`/`Section`, `CrimeHead`/`CrimeSubHead`, lookup masters,
+etc.) with the official 18-digit `CrimeNo`. See **[the schema module](backend/src/database/models_fir.py)**
+and the projection ETL **[migrate_to_fir_schema.py](backend/migrate_to_fir_schema.py)**.
 
 For a detailed phase-by-phase changelog, see **[PROJECT_STATUS.md](PROJECT_STATUS.md)**.
 
@@ -54,30 +60,45 @@ and one-click conversation export to PDF.
 **Analytics dashboard** — totals and breakdowns by district, crime type, and
 month, with trend and bar charts.
 
-**Criminal network analysis** — interactive force-directed graph of associations
-between offenders and gangs, with organized-crime clustering.
+**Case Investigation** — enter a Crime No (FIR) to pull the full dossier: accused,
+victims, incident location with **coordinates + embedded map and "Get Directions"**,
+and police/officer/court details from the official schema.
+
+**Legal-section queries** — ask by IPC/section ("cases under IPC 302", "section 379
+in Mysuru", "u/s 420") and the engine maps it to the crime type.
+
+**Criminal network analysis** — force-directed graph **grounded in real co-accused
+cases**: every edge traces to the actual linking Crime No(s) (hover to see them),
+with an offender **search box** and organized-crime clustering.
 
 **Hotspot map** — geographic crime distribution with district hotspots and
 90-day emerging-surge alerts.
 
 **Sociological insights** — accused breakdown by age, gender, socio-economic
-status, education, and occupation.
+status, education, occupation, and **urban/rural**, plus **social-risk-factor
+correlations** (economic stress, education, occupation, urbanization).
 
 **Offender profiling** — repeat-offender ranking with an explainable 0-100 risk
-score, primary modus operandi, and full case history.
+score, primary modus operandi, and full case history; drill in from any accused.
 
 **Decision support** — automated case summaries, timelines, investigative leads,
 and similar-case matching with outcomes.
 
-**Financial analysis** — suspicious money-trail tracing linked to cases.
+**Financial analysis** — suspicious money-trail tracing (a labeled demo
+integration; production would connect to bank / FIU-IND feeds).
 
-**Forecasting** — next-month projection plus district early-warning alerts.
+**Forecasting & trends** — next-month projection, district early-warning alerts,
+and **seasonal (month-of-year) + festival-window** trend analysis.
+
+**Case analytics** — arrest and clearance (chargesheet) rates per district, and
+officer caseload — computed from the official `ArrestSurrender`/`ChargesheetDetails`.
 
 **Explainable AI** — every answer carries an evidence trail (intent, confidence,
 filters, records examined, data source, interpretation).
 
-**Governance** — token auth, PBKDF2-hashed passwords, role-based access
-(officer / admin), and a persisted, admin-viewable audit log.
+**Governance** — token auth, PBKDF2-hashed passwords, **4-role access control**
+(investigator / analyst / supervisor / policymaker) with per-role tabs, and a
+persisted, supervisor-viewable audit log.
 
 ---
 
@@ -112,14 +133,14 @@ This keeps queries injection-safe and answers auditable.
 ```
 backend/
 ├── main.py                       # FastAPI app, routers, CORS, startup
-├── generate_sample_data.py       # seeds 154 crime incidents
-├── generate_phase4_data.py       # seeds persons, gangs, FIRs, money trails
+├── generate_narrative_data.py    # seeds crimes, persons, gangs, FIRs, money trails
+├── migrate_to_fir_schema.py      # projects data into the official FIR schema
 ├── src/
 │   ├── api/
-│   │   ├── auth.py               # tokens, password hashing, require_role()
+│   │   ├── auth.py               # tokens, password hashing, 4-role require_role()
 │   │   └── routes/               # chat, stats, network, hotspots, insights,
-│   │       │                     #   decision_support, details, audit, auth
-│   ├── database/                 # models.py (full schema), session.py
+│   │       │                     #   decision_support, details, casework, audit, auth
+│   ├── database/                 # models.py (analytics) + models_fir.py (official schema)
 │   ├── nlp/                      # intent_classifier, followup, kannada_support
 │   ├── query_engine/             # translator.py (intent → safe SQL)
 │   └── services/                 # crime_detail.py
@@ -128,7 +149,7 @@ frontend/src/
 ├── pages/ChatPage.tsx            # main app + chat
 ├── components/                   # Dashboard, NetworkView/Graph, HotspotView,
 │   │                             #   InsightsView, ProfilesView, FinanceView,
-│   │                             #   ForecastView, AuditView, Login
+│   │                             #   ForecastView, CaseInvestigationView, AuditView, Login
 ├── api.ts                        # API base, token, authenticated fetch
 └── locale.ts                     # Kannada localization of data + answers
 ```
@@ -164,11 +185,15 @@ ollama pull qwen2.5:3b
 # the decoupled AI service (FastAPI + Ollama) is wired via env config
 ```
 
-### Demo credentials
-| Username | Password | Role |
-|----------|----------|------|
-| officer | ksp@2024 | officer |
-| admin | admin@2024 | admin (sees AUDIT tab) |
+### Demo credentials (role-based access — Area 10)
+| Username | Password | Role | Sees |
+|----------|----------|------|------|
+| investigator | invest@2024 | investigator | AI Assistant, Dashboard, Network, Map, Profiles, Case Investigation |
+| analyst | analyst@2024 | analyst | + Insights, Finance, Forecast |
+| supervisor | super@2024 | supervisor | everything + AUDIT |
+| policymaker | policy@2024 | policymaker | Dashboard, Map, Insights, Forecast (high-level) |
+
+(Legacy `officer / ksp@2024` and `admin / admin@2024` still work.)
 
 ---
 
@@ -195,14 +220,16 @@ Frontend: `REACT_APP_API_BASE` (default `http://localhost:8004`).
 | POST | `/api/login` | — | Authenticate, returns token |
 | POST | `/api/chat` | ✓ | Conversational query (+ follow-ups, detail, summary) |
 | GET | `/api/stats` | ✓ | Dashboard analytics |
-| GET | `/api/network/*` | ✓ | Network/gang graphs + overview |
-| GET | `/api/hotspots`, `/api/patterns/mo` | ✓ | Hotspots & modus operandi |
-| GET | `/api/sociological` | ✓ | Demographic insights |
+| GET | `/api/crime/{crimeNo}` | ✓ | Full case dossier (Case Investigation) |
+| GET | `/api/network/overview`, `/api/network/search`, `/api/network/person/{id}` | ✓ | Grounded co-accused network + offender search |
+| GET | `/api/hotspots`, `/api/patterns/mo`, `/api/trends/seasonal` | ✓ | Hotspots, modus operandi, seasonal/festival trends |
+| GET | `/api/sociological` | ✓ | Demographic + social-risk-factor insights |
 | GET | `/api/offenders`, `/api/offenders/{id}` | ✓ | Risk-ranked profiles |
 | GET | `/api/cases/{fir}/summary`, `/similar` | ✓ | Decision support |
-| GET | `/api/financial/trails` | ✓ | Money-trail analysis |
+| GET | `/api/clearance`, `/api/officer-caseload` | ✓ | Arrest/clearance rates + officer caseload |
+| GET | `/api/financial/trails` | ✓ | Money-trail analysis (demo integration) |
 | GET | `/api/forecast` | ✓ | Forecast + early-warning alerts |
-| GET | `/api/audit` | admin | Audit log |
+| GET | `/api/audit` | supervisor | Audit log |
 
 ---
 
@@ -262,10 +289,12 @@ Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
 ---
 
 ## Roadmap
-- Wire the Ollama-based conversational layer (decoupled AI service) into chat.
-- Re-seed with planted, discoverable narrative patterns for richer analytics.
-- Upgrade the hotspot map to a geographic basemap (Leaflet) + heatmap.
+- Load real/realistic KSP data (financial, gangs, and demographics are currently
+  synthetic; the official schema is ready to receive real data).
 - Migrate to PostgreSQL for the production database (currently SQLite on `/tmp`).
+- Upgrade forecasting from a moving-average to a seasonality-aware ML model.
+- Unify victims / locations / financial accounts into the network graph.
+- Grow the automated test suite to cover the newer endpoints.
 
 ---
 
