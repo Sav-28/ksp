@@ -28,6 +28,9 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
   const [title, setTitle] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [searchQ, setSearchQ] = useState('');
+  const [searchResults, setSearchResults] = useState<TopPerson[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const loadOverview = async () => {
     setLoading(true);
@@ -43,6 +46,19 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
   };
 
   useEffect(() => { loadOverview(); }, []);
+
+  const doSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const q = searchQ.trim();
+    if (q.length < 2) { setSearchResults(null); return; }
+    setSearching(true);
+    try {
+      const res = await apiFetch(`/api/network/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      setSearchResults(data.results || []);
+    } catch { setSearchResults([]); }
+    finally { setSearching(false); }
+  };
 
   const loadPersonNetwork = async (personId: number, name: string) => {
     try {
@@ -77,14 +93,44 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
         🕸️ {t('Criminal Network Analysis', 'ಅಪರಾಧ ಜಾಲ ವಿಶ್ಲೇಷಣೆ')}
       </h2>
       <p style={{ color: '#666', fontSize: 14, marginBottom: 20 }}>
-        {t('Associations between offenders, gangs, and cases', 'ಅಪರಾಧಿಗಳು, ಗ್ಯಾಂಗ್‌ಗಳು ಮತ್ತು ಪ್ರಕರಣಗಳ ನಡುವಿನ ಸಂಬಂಧಗಳು')}
-        {' · '}{overview.total_relationships} {t('links', 'ಸಂಪರ್ಕಗಳು')}
+        {t('Offenders linked by shared cases (co-accused on the same FIR)',
+           'ಹಂಚಿದ ಪ್ರಕರಣಗಳಿಂದ ಜೋಡಿಸಲಾದ ಅಪರಾಧಿಗಳು (ಒಂದೇ ಎಫ್‌ಐಆರ್‌ನಲ್ಲಿ ಸಹ-ಆರೋಪಿ)')}
+        {' · '}{overview.total_relationships} {t('evidence-backed links', 'ಪುರಾವೆ ಆಧಾರಿತ ಸಂಪರ್ಕಗಳು')}
       </p>
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {/* Left: selectors */}
         <div style={{ flex: '1 1 280px', minWidth: 280 }}>
+          {/* Search any offender */}
           <div style={card}>
+            <div style={cardTitle}>🔍 {t('Search Offender', 'ಅಪರಾಧಿ ಹುಡುಕಿ')}</div>
+            <form onSubmit={doSearch} style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={searchQ}
+                onChange={(ev) => setSearchQ(ev.target.value)}
+                placeholder={t('Name, e.g. Vikram', 'ಹೆಸರು, ಉದಾ. ವಿಕ್ರಮ್')}
+                style={{ flex: 1, padding: '9px 11px', fontSize: 14, border: '1px solid #c0c8d0', borderRadius: 6 }}
+              />
+              <button type="submit" style={{ ...btn, padding: '9px 16px' }}>
+                {searching ? '…' : t('Go', 'ಹೋಗಿ')}
+              </button>
+            </form>
+            {searchResults && (
+              <div style={{ marginTop: 10 }}>
+                {searchResults.length === 0 && (
+                  <div style={{ color: '#999', fontSize: 13 }}>{t('No offenders found.', 'ಯಾರೂ ಸಿಗಲಿಲ್ಲ.')}</div>
+                )}
+                {searchResults.map((p) => (
+                  <div key={p.person_id} onClick={() => loadPersonNetwork(p.person_id, p.name)} style={rowItem}>
+                    <span>👤 {localizePersonName(p.name, language)}</span>
+                    <span style={{ fontSize: 12, color: '#666' }}>{p.connections} {t('links', 'ಸಂಪರ್ಕ')}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...card, marginTop: 16 }}>
             <div style={cardTitle}>🔗 {t('Most Connected Offenders', 'ಅತಿ ಹೆಚ್ಚು ಸಂಪರ್ಕಿತ ಅಪರಾಧಿಗಳು')}</div>
             {overview.top_connected_persons.map((p) => (
               <div key={p.person_id} onClick={() => loadPersonNetwork(p.person_id, p.name)} style={rowItem}>
@@ -118,8 +164,11 @@ const NetworkView = ({ language }: { language: 'en' | 'kn' }) => {
                   <span>🔴 {t('Focus', 'ಕೇಂದ್ರ')}</span>
                   <span>🟠 {t('Gang leader', 'ಗ್ಯಾಂಗ್ ನಾಯಕ')}</span>
                   <span>🔵 {t('Associate', 'ಸಹಚರ')}</span>
-                  <span style={{ color: '#90a4ae' }}>— {t('co-accused', 'ಸಹ-ಆರೋಪಿ')}</span>
-                  <span style={{ color: '#ff9800' }}>— {t('gang link', 'ಗ್ಯಾಂಗ್ ಸಂಪರ್ಕ')}</span>
+                  <span style={{ color: '#c62828' }}>— {t('co-accused (thicker = more shared cases)', 'ಸಹ-ಆರೋಪಿ (ದಪ್ಪ = ಹೆಚ್ಚು ಪ್ರಕರಣಗಳು)')}</span>
+                </div>
+                <div style={{ marginTop: 4, fontSize: 11, color: '#999' }}>
+                  💡 {t('Hover a link to see the shared FIR(s); click a node to expand.',
+                        'ಹಂಚಿದ ಎಫ್‌ಐಆರ್ ನೋಡಲು ಸಂಪರ್ಕದ ಮೇಲೆ ಹೋವರ್ ಮಾಡಿ; ವಿಸ್ತರಿಸಲು ನೋಡ್ ಕ್ಲಿಕ್ ಮಾಡಿ.')}
                 </div>
               </>
             ) : (

@@ -83,6 +83,27 @@ def _edges_within(included: Set[int], pair_cases: Dict[Tuple[int, int], Set[str]
     return edges
 
 
+@router.get("/network/search")
+async def search_offenders(
+    q: str = "",
+    db: Session = Depends(get_db),
+    username: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Search offenders by name; returns matches ranked by network connections
+    so any person's network can be looked up (not just the top-10 list)."""
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"results": []}
+    adjacency, _ = _coaccused_index(db)
+    matches = db.query(Person).filter(Person.full_name.ilike(f"%{q}%")).limit(40).all()
+    results = [{
+        "person_id": p.id, "name": p.full_name, "district": p.district,
+        "connections": len(adjacency.get(p.id, set())), "risk_score": p.risk_score,
+    } for p in matches]
+    results.sort(key=lambda x: x["connections"], reverse=True)
+    return {"results": results}
+
+
 @router.get("/network/person/{person_id}")
 async def person_network(
     person_id: int,

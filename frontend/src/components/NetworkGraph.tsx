@@ -15,6 +15,7 @@ export interface GraphEdge {
   target: string;
   type?: string;
   strength?: number;
+  cases?: string[];   // the Crime No(s) that link the two people (co-accused)
 }
 
 interface Pos { x: number; y: number; }
@@ -26,7 +27,8 @@ const GROUP_COLOR: Record<string, string> = {
 };
 
 const EDGE_COLOR: Record<string, string> = {
-  co_accused: '#90a4ae',
+  'co-accused': '#c62828',
+  co_accused: '#c62828',
   gang_member: '#ff9800',
   family: '#66bb6a',
   financial: '#ab47bc',
@@ -138,6 +140,9 @@ const NetworkGraph = ({
         const s = positions[e.source], t = positions[e.target];
         if (!s || !t) return null;
         const dim = hover && hover !== e.source && hover !== e.target;
+        const tip = e.cases && e.cases.length
+          ? `Co-accused in ${e.cases.length} case(s): ${e.cases.join(', ')}`
+          : (e.type || 'link');
         return (
           <line
             key={i}
@@ -145,7 +150,9 @@ const NetworkGraph = ({
             stroke={EDGE_COLOR[e.type || ''] || '#cfd8dc'}
             strokeWidth={1 + (e.strength || 1)}
             strokeOpacity={dim ? 0.15 : 0.7}
-          />
+          >
+            <title>{tip}</title>
+          </line>
         );
       })}
       {/* Nodes */}
