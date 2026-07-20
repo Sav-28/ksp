@@ -79,7 +79,26 @@ interface ChatMessage {
   breakdown?: BreakdownItem[];
   groupBy?: string;
   detail?: CrimeDetail;
+  personProfile?: PersonProfile;
   evidence?: Record<string, any>;
+}
+
+// Full offender profile (from GET /api/person/{id}) — the criminal dossier an
+// investigating officer needs: prior record, risk, network, gangs, finances.
+interface PersonProfile {
+  id: number;
+  name: string;
+  demographics?: {
+    age?: number; gender?: string; occupation?: string; education?: string;
+    socio_economic_status?: string; district?: string; phone?: string;
+  };
+  risk_score?: number;
+  is_repeat_offender?: boolean;
+  accused_in_n_cases?: number;
+  cases?: { fir_number: string; crime_type: string; district: string; date: string; role: string }[];
+  gangs?: { gang: string; role: string; activity: string }[];
+  associates?: PersonBrief[];
+  financial_accounts?: { bank: string; type: string; account: string; flagged: boolean }[];
 }
 
 // Emoji/color accent per crime type
@@ -465,20 +484,29 @@ const BreakdownBars = ({ data, groupBy, language }: { data: BreakdownItem[]; gro
 };
 
 // Full FIR detail card (accused, victims, investigation) — Phase 5
-const CrimeDetailCard = ({ detail, language }: { detail: CrimeDetail; language: 'en' | 'kn' }) => {
+const CrimeDetailCard = ({ detail, language, onPersonClick }:
+  { detail: CrimeDetail; language: 'en' | 'kn'; onPersonClick?: (id: number) => void }) => {
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
   const accent = accentFor(detail.crime_type);
   const inv = detail.investigation;
 
-  const PersonChip = ({ p }: { p: PersonBrief }) => (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: '5px',
-      backgroundColor: '#fff', border: '1px solid #e0e0e0', borderRadius: '14px',
-      padding: '3px 10px', fontSize: '12px', margin: '2px'
-    }}>
-      👤 {localizePersonName(p.name, language)}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}
-    </span>
-  );
+  const PersonChip = ({ p, clickable }: { p: PersonBrief; clickable?: boolean }) => {
+    const canClick = !!(clickable && onPersonClick && p.id);
+    return (
+      <span
+        onClick={() => canClick && onPersonClick!(p.id)}
+        title={canClick ? t('Click for full criminal profile', 'ಪೂರ್ಣ ಪ್ರೊಫೈಲ್‌ಗಾಗಿ ಕ್ಲಿಕ್ ಮಾಡಿ') : undefined}
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: '5px',
+          backgroundColor: '#fff', border: `1px solid ${canClick ? '#c62828' : '#e0e0e0'}`,
+          borderRadius: '14px', padding: '3px 10px', fontSize: '12px', margin: '2px',
+          cursor: canClick ? 'pointer' : 'default',
+        }}
+      >
+        👤 {localizePersonName(p.name, language)}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}{canClick ? ' 🔎' : ''}
+      </span>
+    );
+  };
 
   return (
     <div style={{
@@ -521,7 +549,7 @@ const CrimeDetailCard = ({ detail, language }: { detail: CrimeDetail; language: 
       <div style={{ fontSize: '13px' }}>
         <div style={{ marginBottom: '6px' }}>
           <strong style={{ color: '#c62828' }}>🚩 {t('Accused', 'ಆರೋಪಿ')} ({detail.accused.length}):</strong>{' '}
-          {detail.accused.length ? detail.accused.map((p) => <PersonChip key={p.id} p={p} />) : <span style={{ color: '#999' }}>—</span>}
+          {detail.accused.length ? detail.accused.map((p) => <PersonChip key={p.id} p={p} clickable />) : <span style={{ color: '#999' }}>—</span>}
         </div>
         <div style={{ marginBottom: '6px' }}>
           <strong style={{ color: '#1976d2' }}>🛡️ {t('Victims', 'ಸಂತ್ರಸ್ತರು')} ({detail.victims.length}):</strong>{' '}
@@ -534,6 +562,90 @@ const CrimeDetailCard = ({ detail, language }: { detail: CrimeDetail; language: 
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// Full offender dossier card — shown when an officer clicks an accused on an
+// FIR. Surfaces the complete criminal intelligence for that person.
+const PersonProfileCard = ({ p, language }: { p: PersonProfile; language: 'en' | 'kn' }) => {
+  const t = (en: string, kn: string) => (language === 'en' ? en : kn);
+  const d = p.demographics || {};
+  const risk = p.risk_score ?? 0;
+  const riskColor = risk >= 70 ? '#c62828' : risk >= 40 ? '#ef6c00' : '#2e7d32';
+  const riskLabel = risk >= 70 ? t('High', 'ಅಧಿಕ') : risk >= 40 ? t('Medium', 'ಮಧ್ಯಮ') : t('Low', 'ಕಡಿಮೆ');
+
+  return (
+    <div style={{
+      backgroundColor: '#fff', border: '1px solid #e0e0e0', borderTop: '4px solid #c62828',
+      borderRadius: '8px', padding: '14px 16px', marginTop: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+        <span style={{ fontWeight: 700, color: '#1a237e', fontSize: '16px' }}>
+          👤 {localizePersonName(p.name, language)}
+          {p.is_repeat_offender && (
+            <span style={{ marginLeft: 8, fontSize: 11, background: '#c62828', color: '#fff', padding: '2px 8px', borderRadius: 10 }}>
+              {t('REPEAT OFFENDER', 'ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿ')}
+            </span>
+          )}
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 700, color: riskColor }}>
+          {t('Risk', 'ಅಪಾಯ')}: {risk}/100 ({riskLabel})
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: '#444', marginBottom: '10px' }}>
+        {d.age != null && <span>🎂 {d.age}</span>}
+        {d.gender && <span>⚧ {d.gender}</span>}
+        {d.occupation && <span>💼 {d.occupation}</span>}
+        {d.education && <span>🎓 {d.education}</span>}
+        {d.socio_economic_status && <span>🏷️ {d.socio_economic_status}</span>}
+        {d.district && <span>📍 {localizeDistrict(d.district, language)}</span>}
+        {d.phone && <span>📞 {d.phone}</span>}
+      </div>
+
+      {/* Prior record */}
+      <div style={{ fontSize: 13, marginBottom: 8 }}>
+        <strong style={{ color: '#c62828' }}>🗂️ {t('Case history', 'ಪ್ರಕರಣ ಇತಿಹಾಸ')} ({p.accused_in_n_cases ?? (p.cases?.length || 0)}):</strong>
+        {p.cases && p.cases.length ? (
+          <div style={{ marginTop: 4 }}>
+            {p.cases.slice(0, 8).map((c, i) => (
+              <div key={i} style={{ fontSize: 12, color: '#333', padding: '2px 0', borderBottom: '1px solid #f0f0f0' }}>
+                <span style={{ fontFamily: 'monospace', color: '#1976d2' }}>{c.fir_number}</span>
+                {' — '}{localizeCrimeType(c.crime_type, language)}, {localizeDistrict(c.district, language)} ({c.date}) · <em>{c.role}</em>
+              </div>
+            ))}
+          </div>
+        ) : <span style={{ color: '#999' }}> —</span>}
+      </div>
+
+      {/* Gangs */}
+      {p.gangs && p.gangs.length > 0 && (
+        <div style={{ fontSize: 13, marginBottom: 6 }}>
+          <strong style={{ color: '#6a1b9a' }}>🕸️ {t('Gang links', 'ಗ್ಯಾಂಗ್ ಸಂಪರ್ಕ')}:</strong>{' '}
+          {p.gangs.map((g, i) => <span key={i}>{g.gang} ({g.role}, {g.activity}){i < p.gangs!.length - 1 ? '; ' : ''}</span>)}
+        </div>
+      )}
+
+      {/* Associates */}
+      {p.associates && p.associates.length > 0 && (
+        <div style={{ fontSize: 13, marginBottom: 6 }}>
+          <strong style={{ color: '#00695c' }}>👥 {t('Known associates', 'ಪರಿಚಿತ ಸಹಚರರು')} ({p.associates.length}):</strong>{' '}
+          {p.associates.slice(0, 8).map((a) => localizePersonName(a.name, language)).join(', ')}
+        </div>
+      )}
+
+      {/* Financial */}
+      {p.financial_accounts && p.financial_accounts.length > 0 && (
+        <div style={{ fontSize: 13 }}>
+          <strong style={{ color: '#ef6c00' }}>💰 {t('Financial accounts', 'ಹಣಕಾಸು ಖಾತೆಗಳು')} ({p.financial_accounts.length}):</strong>{' '}
+          {p.financial_accounts.filter(a => a.flagged).length > 0 && (
+            <span style={{ color: '#c62828', fontWeight: 600 }}>
+              {p.financial_accounts.filter(a => a.flagged).length} {t('flagged', 'ಗುರುತಿಸಲಾಗಿದೆ')}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -612,7 +724,8 @@ const EvidencePanel = ({ evidence, language }: { evidence: Record<string, any>; 
 };
 
 // Government-styled message bubble
-const MessageBubble = ({ message, language, onCrimeClick }: { message: ChatMessage; language: 'en' | 'kn'; onCrimeClick?: (fir: string) => void }) => {
+const MessageBubble = ({ message, language, onCrimeClick, onPersonClick }:
+  { message: ChatMessage; language: 'en' | 'kn'; onCrimeClick?: (fir: string) => void; onPersonClick?: (id: number) => void }) => {
   const hasResults = message.results && message.results.length > 0;
   const hasBreakdown = message.breakdown && message.breakdown.length > 0;
   const isRich = !message.isUser && (hasResults || hasBreakdown);
@@ -686,7 +799,10 @@ const MessageBubble = ({ message, language, onCrimeClick }: { message: ChatMessa
             {hasBreakdown && <BreakdownBars data={message.breakdown!} groupBy={message.groupBy} language={language} />}
 
             {/* FIR detail card */}
-            {message.detail && <CrimeDetailCard detail={message.detail} language={language} />}
+            {message.detail && <CrimeDetailCard detail={message.detail} language={language} onPersonClick={onPersonClick} />}
+
+            {/* Full offender profile card (drill-down from an accused) */}
+            {message.personProfile && <PersonProfileCard p={message.personProfile} language={language} />}
 
             {/* Crime case cards */}
             {hasResults && (
@@ -1169,6 +1285,27 @@ const ChatPage: React.FC = () => {
     }
   };
 
+  // Click an accused on an FIR → fetch and append their full criminal dossier
+  const showPersonDetail = async (personId: number) => {
+    if (!personId) return;
+    setMessages(prev => [...prev, { text: 'Loading criminal profile...', isUser: false, loading: true }]);
+    try {
+      const res = await apiFetch(`/api/person/${personId}`);
+      const profile = await res.json();
+      setMessages(prev => prev.slice(0, -1));
+      setMessages(prev => [...prev, {
+        text: `🕵️ ${currentLanguage === 'en' ? 'Full criminal profile for' : 'ಪೂರ್ಣ ಅಪರಾಧ ಪ್ರೊಫೈಲ್'} ${profile.name}:`,
+        isUser: false,
+        intent: 'PERSON_PROFILE',
+        personProfile: profile,
+      }]);
+    } catch (e: any) {
+      setMessages(prev => prev.slice(0, -1));
+      if (e.message === 'UNAUTHORIZED') { handleSessionExpired(); return; }
+      setMessages(prev => [...prev, { text: 'Could not load the criminal profile.', isUser: false }]);
+    }
+  };
+
   // Export the conversation as a PDF (via the browser's print-to-PDF, which
   // renders Kannada correctly (via html2canvas) and downloads directly — no
   // new tab, no print dialog.
@@ -1401,7 +1538,7 @@ const ChatPage: React.FC = () => {
           backgroundColor: '#fafafa'
         }}>
           {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} />
+            <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} onPersonClick={showPersonDetail} />
           ))}
           <div ref={messagesEndRef} />
         </div>
