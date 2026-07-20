@@ -5,8 +5,11 @@ into the OFFICIAL Karnataka Police FIR schema (models_fir.py).
 This makes the database schema-compliant with the hackathon ER diagram WITHOUT
 destroying the working analytics layer. It is:
   - idempotent  : wipes and rebuilds only the official FIR tables on each run,
-  - non-destructive to the analytics tables (crimes/persons/... untouched),
   - deterministic: same input rows → same official rows.
+
+The one field it updates on the analytics side is crimes.fir_number, which is
+set to the official CrimeNo so the whole app presents a single official
+identifier (the analytics rows otherwise stay intact).
 
 Run:  python migrate_to_fir_schema.py
 """
@@ -191,6 +194,11 @@ def main():
             case_no = crime_no[-9:]
             status = (fir.investigation_status if fir else None) or "Registered"
 
+            # Unify identifiers: the analytics crime now carries the OFFICIAL
+            # CrimeNo as its fir_number, so every ORM read / lookup / detail view
+            # and the compatibility view all expose the same official number.
+            c.fir_number = crime_no
+
             db.add(F.CaseMaster(
                 CaseMasterID=cm_id, CrimeNo=crime_no, CaseNo=case_no,
                 CrimeRegisteredDate=c.date_occurred,
@@ -280,7 +288,7 @@ def main():
         ]:
             print(f"  {label:22}: {db.query(model).count()}")
         print("=" * 60)
-        print("[DONE] Analytics tables untouched; official schema is now populated.")
+        print("[DONE] Official schema populated; crimes.fir_number unified to CrimeNo.")
     finally:
         db.close()
 

@@ -316,7 +316,7 @@ async def chat_endpoint(
         if detail_type:
             if not fir:
                 return {
-                    "answer": "Which FIR are you asking about? Please mention an FIR number (e.g. 'details of FIR0100').",
+                    "answer": "Which case are you asking about? Please mention a Crime No (e.g. 'details of 100010001202600001').",
                     "intent": "FIR_DETAIL",
                     "confidence": 1.0,
                     "entities": {},

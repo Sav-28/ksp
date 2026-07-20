@@ -10,8 +10,12 @@ Handles two things the ML intent classifier doesn't:
 import re
 from typing import Dict, Any, Optional
 
-# Matches "FIR0100", "FIR 100", "fir0100", "f.i.r 0100"
-_FIR_RE = re.compile(r'\bf\.?i\.?r\.?\s*0*(\d{1,5})\b', re.IGNORECASE)
+# The official identifier is the 18-digit CrimeNo (e.g. 100010001202600001),
+# optionally introduced by "crime no", "fir no", "fir" or "case no". We also
+# still accept a short legacy "FIR0100" style reference for backward-compat.
+_CRIMENO_RE = re.compile(
+    r'(?:crime\s*no\.?|fir\s*no\.?|case\s*no\.?|fir)?\s*0*(\d{9,20})\b', re.IGNORECASE)
+_LEGACY_FIR_RE = re.compile(r'\bf\.?i\.?r\.?\s*0*(\d{1,5})\b', re.IGNORECASE)
 
 # Keywords that indicate a detail look-up about a specific case
 _ACCUSED_WORDS = ["accused", "offender", "suspect", "arrested", "culprit"]
@@ -25,12 +29,18 @@ _BROAD_WORDS = ["all crimes", "everywhere", "entire state", "whole state", "acro
 
 
 def extract_fir_number(text: str) -> Optional[str]:
-    """Return a normalized FIR number like 'FIR0100' if present in the text."""
-    m = _FIR_RE.search(text)
-    if not m:
-        return None
-    num = int(m.group(1))
-    return f"FIR{num:04d}"
+    """
+    Return the official CrimeNo referenced in the text (a 9-20 digit number,
+    optionally prefixed by 'crime no'/'fir no'/'fir'/'case no'). Falls back to
+    the legacy 'FIR0100' form for backward-compatibility.
+    """
+    m = _CRIMENO_RE.search(text)
+    if m:
+        return m.group(1)
+    legacy = _LEGACY_FIR_RE.search(text)
+    if legacy:
+        return f"FIR{int(legacy.group(1)):04d}"
+    return None
 
 
 def detect_detail_request(text: str) -> Optional[str]:
