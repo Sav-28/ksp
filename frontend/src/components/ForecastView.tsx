@@ -5,10 +5,17 @@ import { localizeDistrict } from '../locale';
 interface Monthly { month: string; count: number; }
 interface Alert { type: string; district: string; recent: number; previous: number; severity: string; message: string; }
 interface ForecastData { monthly_history: Monthly[]; next_month_forecast: number | null; alerts: Alert[]; alert_count: number; }
+interface Seasonal {
+  monthly_seasonality: Monthly[];
+  avg_per_month: number;
+  peak_month: { month: string; count: number } | null;
+  festival_window: { months: string; avg_per_month: number; baseline_avg_per_month: number; uplift_pct: number };
+}
 
 const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
   const [data, setData] = useState<ForecastData | null>(null);
+  const [seasonal, setSeasonal] = useState<Seasonal | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -17,6 +24,10 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
     try {
       const res = await apiFetch('/api/forecast');
       setData(await res.json());
+      try {
+        const sres = await apiFetch('/api/trends/seasonal');
+        setSeasonal(await sres.json());
+      } catch { /* seasonal is optional */ }
     } catch (e: any) {
       setError(e.message === 'UNAUTHORIZED' ? 'Session expired. Please log in again.' : 'Unable to load forecast.');
     } finally { setLoading(false); }
@@ -84,6 +95,39 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
           )}
         </svg>
       </div>
+
+      {/* Seasonal & festival-window pattern (Area 3) */}
+      {seasonal && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div style={cardTitle}>🗓️ {t('Seasonal Pattern (month of year)', 'ಋತುಮಾನ ಮಾದರಿ (ವರ್ಷದ ತಿಂಗಳು)')}</div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 120, marginBottom: 8 }}>
+            {(() => {
+              const mmax = Math.max(...seasonal.monthly_seasonality.map(m => m.count), 1);
+              return seasonal.monthly_seasonality.map((m, i) => (
+                <div key={i} style={{ flex: 1, textAlign: 'center' }}>
+                  <div title={`${m.month}: ${m.count}`}
+                    style={{
+                      height: `${(m.count / mmax) * 100}px`,
+                      background: seasonal.peak_month && m.month === seasonal.peak_month.month ? '#e53935' : '#3949ab',
+                      borderRadius: '3px 3px 0 0',
+                    }} />
+                  <div style={{ fontSize: 10, color: '#666', marginTop: 3 }}>{m.month}</div>
+                </div>
+              ));
+            })()}
+          </div>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 13, color: '#444' }}>
+            {seasonal.peak_month && (
+              <span>📈 {t('Peak month', 'ಗರಿಷ್ಠ ತಿಂಗಳು')}: <strong>{seasonal.peak_month.month}</strong> ({seasonal.peak_month.count})</span>
+            )}
+            <span>🎪 {t('Festival window', 'ಹಬ್ಬದ ಅವಧಿ')} ({seasonal.festival_window.months}): {' '}
+              <strong style={{ color: seasonal.festival_window.uplift_pct >= 0 ? '#e53935' : '#2e7d32' }}>
+                {seasonal.festival_window.uplift_pct >= 0 ? '+' : ''}{seasonal.festival_window.uplift_pct}%
+              </strong> {t('vs baseline', 'ಸಾಮಾನ್ಯಕ್ಕೆ ಹೋಲಿಸಿ')}
+            </span>
+          </div>
+        </div>
+      )}
 
       <div style={card}>
         <div style={cardTitle}>🚨 {t('Early-Warning Alerts', 'ಮುನ್ನೆಚ್ಚರಿಕೆ ಎಚ್ಚರಿಕೆಗಳು')}</div>

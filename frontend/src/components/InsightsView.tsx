@@ -8,7 +8,9 @@ interface SocioData {
   by_socio_economic: LabelCount[];
   by_education: LabelCount[];
   by_occupation: LabelCount[];
-  insights: { highest_risk_ses: string; most_common_age_band: string; total_accused_records: number };
+  by_urbanization: LabelCount[];
+  social_risk_factors: { factor: string; finding: string }[];
+  insights: { highest_risk_ses: string; most_common_age_band: string; urban_share_pct: number; total_accused_records: number };
 }
 
 const PALETTE = ['#1a237e', '#283593', '#3949ab', '#5c6bc0', '#7986cb', '#ff9800', '#fb8c00', '#e65100'];
@@ -83,7 +85,21 @@ const InsightsView = ({ language }: { language: 'en' | 'kn' }) => {
         <Bars title={t('By Socio-Economic Status', 'ಸಾಮಾಜಿಕ-ಆರ್ಥಿಕ ಸ್ಥಿತಿ')} icon="💰" data={data.by_socio_economic} />
         <Bars title={t('By Education', 'ಶಿಕ್ಷಣದ ಪ್ರಕಾರ')} icon="🎓" data={data.by_education} />
         <Bars title={t('By Occupation', 'ಉದ್ಯೋಗದ ಪ್ರಕಾರ')} icon="💼" data={data.by_occupation} />
+        {data.by_urbanization && <Bars title={t('By Urbanization', 'ನಗರೀಕರಣದ ಪ್ರಕಾರ')} icon="🏙️" data={data.by_urbanization} />}
       </div>
+
+      {/* Social risk factor correlations (Area 4) */}
+      {data.social_risk_factors && data.social_risk_factors.length > 0 && (
+        <div style={{ ...card, marginTop: 20 }}>
+          <div style={cardTitle}>⚠️ {t('Social Risk Factors', 'ಸಾಮಾಜಿಕ ಅಪಾಯ ಅಂಶಗಳು')}</div>
+          {data.social_risk_factors.map((f, i) => (
+            <div key={i} style={{ display: 'flex', gap: 12, padding: '8px 0', borderBottom: i < data.social_risk_factors.length - 1 ? '1px solid #f0f0f0' : 'none' }}>
+              <div style={{ minWidth: 130, fontWeight: 600, color: '#1a237e', fontSize: 13 }}>{f.factor}</div>
+              <div style={{ fontSize: 13, color: '#444' }}>{f.finding}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div style={{ marginTop: 16, fontSize: 12, color: '#999' }}>
         ℹ️ {t('Insights are statistical correlations from recorded data, not determinants of criminality.', 'ಒಳನೋಟಗಳು ದಾಖಲಾದ ಡೇಟಾದಿಂದ ಸಂಖ್ಯಾಶಾಸ್ತ್ರೀಯ ಸಹಸಂಬಂಧಗಳಾಗಿವೆ.')}

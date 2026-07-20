@@ -24,6 +24,16 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 # Area 4 — Sociological insights
 # ---------------------------------------------------------------------------
+# District urbanization classification (for socio-spatial correlation — Area 4).
+URBAN_DISTRICTS = {"Bengaluru Urban", "Mysuru", "Mangaluru", "Hubli", "Dharwad", "Belagavi"}
+
+
+def _urbanization(district: str) -> str:
+    if not district:
+        return "Unknown"
+    return "Urban" if district in URBAN_DISTRICTS else "Rural / Semi-urban"
+
+
 def _age_band(age: int) -> str:
     if age is None:
         return "Unknown"
@@ -55,6 +65,7 @@ async def sociological_insights(
     ses = Counter()
     education = Counter()
     occupations = Counter()
+    urbanization = Counter()
 
     # Count by accused involvement (each accused link counts)
     for link in accused_links:
@@ -66,14 +77,49 @@ async def sociological_insights(
         ses[p.socio_economic_status or "Unknown"] += 1
         education[p.education_level or "Unknown"] += 1
         occupations[p.occupation or "Unknown"] += 1
+        urbanization[_urbanization(p.district)] += 1
 
     def to_list(counter, order=None):
         items = sorted(counter.items(), key=lambda x: x[1], reverse=True)
         return [{"label": k, "count": v} for k, v in items]
 
     # A simple social-risk insight: SES band with highest accused share
+    total = len(accused_links) or 1
     top_ses = ses.most_common(1)[0][0] if ses else None
     top_age = age_bands.most_common(1)[0][0] if age_bands else None
+    top_edu = education.most_common(1)[0][0] if education else None
+    top_occ = occupations.most_common(1)[0][0] if occupations else None
+    urban_share = round(100.0 * urbanization.get("Urban", 0) / total, 1)
+
+    def _pct(counter, key):
+        return round(100.0 * counter.get(key, 0) / total, 1)
+
+    # Correlations of crime with social indicators (Area 4). Each is a
+    # data-backed finding, not a claim — the share is shown for transparency.
+    social_risk_factors = []
+    if top_ses:
+        social_risk_factors.append({
+            "factor": "Economic stress",
+            "finding": f"{_pct(ses, top_ses)}% of accused fall in the '{top_ses}' "
+                       f"socio-economic band — the largest share.",
+        })
+    if top_edu:
+        social_risk_factors.append({
+            "factor": "Education",
+            "finding": f"'{top_edu}' is the most common education level among accused "
+                       f"({_pct(education, top_edu)}%).",
+        })
+    if top_occ:
+        social_risk_factors.append({
+            "factor": "Occupation",
+            "finding": f"'{top_occ}' is the most frequent occupation among accused "
+                       f"({_pct(occupations, top_occ)}%).",
+        })
+    social_risk_factors.append({
+        "factor": "Urbanization",
+        "finding": f"{urban_share}% of accused are from urban districts, "
+                   f"{round(100 - urban_share, 1)}% from rural / semi-urban areas.",
+    })
 
     return {
         "by_age_band": to_list(age_bands),
@@ -81,9 +127,12 @@ async def sociological_insights(
         "by_socio_economic": to_list(ses),
         "by_education": to_list(education),
         "by_occupation": to_list(occupations)[:8],
+        "by_urbanization": to_list(urbanization),
+        "social_risk_factors": social_risk_factors,
         "insights": {
             "highest_risk_ses": top_ses,
             "most_common_age_band": top_age,
+            "urban_share_pct": urban_share,
             "total_accused_records": len(accused_links),
         },
     }

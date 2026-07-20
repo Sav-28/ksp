@@ -114,6 +114,51 @@ async def get_hotspots(
     }
 
 
+_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+# Karnataka festival season (Ganesh Chaturthi → Dasara → Deepavali) drives
+# seasonal crime spikes (theft/snatching around crowds & shopping).
+_FESTIVAL_MONTHS = [9, 10, 11]
+
+
+@router.get("/trends/seasonal")
+async def seasonal_trends(
+    db: Session = Depends(get_db),
+    username: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Seasonal (month-of-year) crime pattern + festival-window event analysis."""
+    rows = db.execute(text(
+        """
+        SELECT CAST(strftime('%m', date_occurred) AS INTEGER) AS mon, COUNT(*) AS c
+        FROM v_crimes WHERE date_occurred IS NOT NULL
+        GROUP BY mon
+        """
+    )).fetchall()
+    by_month = {r._mapping["mon"]: r._mapping["c"] for r in rows}
+
+    monthly = [{"month": _MONTHS[m - 1], "count": by_month.get(m, 0)} for m in range(1, 13)]
+    counts = [x["count"] for x in monthly]
+    avg = sum(counts) / 12 if counts else 0
+    peak = max(monthly, key=lambda x: x["count"]) if any(counts) else None
+
+    fest_vals = [by_month.get(m, 0) for m in _FESTIVAL_MONTHS]
+    fest_avg = sum(fest_vals) / len(fest_vals) if fest_vals else 0
+    rest = [by_month.get(m, 0) for m in range(1, 13) if m not in _FESTIVAL_MONTHS]
+    rest_avg = sum(rest) / len(rest) if rest else 0
+    uplift = round((fest_avg / rest_avg - 1) * 100, 1) if rest_avg else 0.0
+
+    return {
+        "monthly_seasonality": monthly,
+        "avg_per_month": round(avg, 1),
+        "peak_month": peak,
+        "festival_window": {
+            "months": "Sep–Nov",
+            "avg_per_month": round(fest_avg, 1),
+            "baseline_avg_per_month": round(rest_avg, 1),
+            "uplift_pct": uplift,
+        },
+    }
+
+
 @router.get("/patterns/mo")
 async def get_mo_patterns(
     db: Session = Depends(get_db),
