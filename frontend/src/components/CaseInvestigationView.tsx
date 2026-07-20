@@ -122,11 +122,31 @@ const CaseInvestigationView = ({ language }: { language: 'en' | 'kn' }) => {
               <Field label={t('Info received at PS', 'ಠಾಣೆಗೆ ಮಾಹಿತಿ')} value={p.info_received} />
             </Grid>
             {loc.latitude != null && loc.longitude != null && (
-              <a href={`https://www.openstreetmap.org/?mlat=${loc.latitude}&mlon=${loc.longitude}#map=15/${loc.latitude}/${loc.longitude}`}
-                 target="_blank" rel="noreferrer"
-                 style={{ display: 'inline-block', marginTop: 8, fontSize: 13, color: '#1976d2' }}>
-                🗺️ {t('View on map', 'ನಕ್ಷೆಯಲ್ಲಿ ನೋಡಿ')}
-              </a>
+              <div style={{ marginTop: 12 }}>
+                {/* Interactive map centered on the incident location */}
+                <iframe
+                  title="incident-location-map"
+                  width="100%"
+                  height="260"
+                  loading="lazy"
+                  style={{ border: '1px solid #d0d7de', borderRadius: 8 }}
+                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${loc.longitude - 0.012}%2C${loc.latitude - 0.008}%2C${loc.longitude + 0.012}%2C${loc.latitude + 0.008}&layer=mapnik&marker=${loc.latitude}%2C${loc.longitude}`}
+                />
+                <div style={{ marginTop: 8, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  <a
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${loc.latitude},${loc.longitude}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ fontSize: 13, color: '#fff', background: '#1a73e8', padding: '7px 14px', borderRadius: 6, fontWeight: 600, textDecoration: 'none' }}>
+                    🧭 {t('Get Directions', 'ದಿಕ್ಕುಗಳನ್ನು ಪಡೆಯಿರಿ')}
+                  </a>
+                  <a
+                    href={`https://www.openstreetmap.org/?mlat=${loc.latitude}&mlon=${loc.longitude}#map=15/${loc.latitude}/${loc.longitude}`}
+                    target="_blank" rel="noreferrer"
+                    style={{ fontSize: 13, color: '#1976d2', alignSelf: 'center' }}>
+                    🗺️ {t('Open full map', 'ಪೂರ್ಣ ನಕ್ಷೆ ತೆರೆಯಿರಿ')}
+                  </a>
+                </div>
+              </div>
             )}
           </Section>
 
