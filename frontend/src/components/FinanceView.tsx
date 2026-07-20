@@ -46,9 +46,17 @@ const FinanceView = ({ language }: { language: 'en' | 'kn' }) => {
       <h2 style={{ color: '#1a237e', fontSize: 24, marginBottom: 6 }}>
         💰 {t('Financial Crime & Transaction Analysis', 'ಆರ್ಥಿಕ ಅಪರಾಧ ಮತ್ತು ವಹಿವಾಟು ವಿಶ್ಲೇಷಣೆ')}
       </h2>
-      <p style={{ color: '#666', fontSize: 14, marginBottom: 20 }}>
+      <p style={{ color: '#666', fontSize: 14, marginBottom: 12 }}>
         {t('Suspicious money trails linked to criminal cases', 'ಅಪರಾಧ ಪ್ರಕರಣಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಶಂಕಿತ ಹಣದ ಜಾಡುಗಳು')}
       </p>
+      <div style={{
+        background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8,
+        padding: '10px 14px', marginBottom: 20, fontSize: 12.5, color: '#7a5c00',
+      }}>
+        ℹ️ {t(
+          'Demo integration: transaction data shown here is representative sample data. In production this module integrates with bank / FIU-IND feeds — the FIR system of record does not itself store financial transactions.',
+          'ಡೆಮೊ ಸಂಯೋಜನೆ: ಇಲ್ಲಿ ತೋರಿಸಿದ ವಹಿವಾಟು ಡೇಟಾ ಮಾದರಿ ಡೇಟಾ. ಉತ್ಪಾದನೆಯಲ್ಲಿ ಇದು ಬ್ಯಾಂಕ್ / FIU-IND ಫೀಡ್‌ಗಳೊಂದಿಗೆ ಸಂಯೋಜಿಸುತ್ತದೆ.')}
+      </div>
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
         <div style={{ ...card, flex: '1 1 180px', borderTop: '4px solid #c62828' }}>

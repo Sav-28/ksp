@@ -126,6 +126,37 @@ const STATUS_COLOR: Record<string, { bg: string; fg: string }> = {
 };
 const statusStyle = (s?: string) => STATUS_COLOR[(s || '').toLowerCase()] || { bg: '#eceff1', fg: '#546e7a' };
 
+// Nav tabs (label pairs + the view each maps to)
+const NAV_TABS: { en: string; kn: string }[] = [
+  { en: 'AI ASSISTANT', kn: 'AI ಸಹಾಯಕ' },
+  { en: 'DASHBOARD', kn: 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್' },
+  { en: 'NETWORK', kn: 'ಜಾಲ' },
+  { en: 'MAP', kn: 'ನಕ್ಷೆ' },
+  { en: 'INSIGHTS', kn: 'ಒಳನೋಟ' },
+  { en: 'PROFILES', kn: 'ಪ್ರೊಫೈಲ್' },
+  { en: 'FINANCE', kn: 'ಹಣಕಾಸು' },
+  { en: 'FORECAST', kn: 'ಮುನ್ಸೂಚನೆ' },
+  { en: 'CASE INVESTIGATION', kn: 'ಪ್ರಕರಣ ತನಿಖೆ' },
+  { en: 'AUDIT', kn: 'ಲೆಕ್ಕಪರಿಶೋಧನೆ' },
+];
+
+// Role-based access control (Area 10): which tabs each role may see.
+const ROLE_TABS: Record<string, string[]> = {
+  investigator: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'PROFILES', 'CASE INVESTIGATION'],
+  analyst: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST'],
+  supervisor: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'AUDIT'],
+  policymaker: ['AI ASSISTANT', 'DASHBOARD', 'MAP', 'INSIGHTS', 'FORECAST'],
+  // Backward-compatible legacy roles:
+  admin: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'AUDIT'],
+  officer: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION'],
+};
+
+const VIEW_TO_TAB: Record<string, string> = {
+  chat: 'AI ASSISTANT', dashboard: 'DASHBOARD', network: 'NETWORK', hotspots: 'MAP',
+  insights: 'INSIGHTS', profiles: 'PROFILES', finance: 'FINANCE', forecast: 'FORECAST',
+  investigation: 'CASE INVESTIGATION', audit: 'AUDIT',
+};
+
 // Government-styled header component
 const GovHeader = ({ 
   onLanguageChange, 
@@ -333,27 +364,14 @@ const GovHeader = ({
         flexWrap: 'wrap',
         boxShadow: '0 2px 6px rgba(0,0,0,0.15)'
       }}>
-        {(currentLanguage === 'en' 
-          ? ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', ...(user?.role === 'admin' ? ['AUDIT'] : [])]
-          : ['AI ಸಹಾಯಕ', 'ಡ್ಯಾಶ್‌ಬೋರ್ಡ್', 'ಜಾಲ', 'ನಕ್ಷೆ', 'ಒಳನೋಟ', 'ಪ್ರೊಫೈಲ್', 'ಹಣಕಾಸು', 'ಮುನ್ಸೂಚನೆ', 'ಪ್ರಕರಣ ತನಿಖೆ', ...(user?.role === 'admin' ? ['ಲೆಕ್ಕಪರಿಶೋಧನೆ'] : [])]
-        ).map((item, idx) => {
-          const baseItems = ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', ...(user?.role === 'admin' ? ['AUDIT'] : [])];
-          const englishItem = baseItems[idx];
-          // Determine if this menu item is active based on current view
-          const isActive = 
-            (currentView === 'chat' && englishItem === 'AI ASSISTANT') ||
-            (currentView === 'dashboard' && englishItem === 'DASHBOARD') ||
-            (currentView === 'network' && englishItem === 'NETWORK') ||
-            (currentView === 'hotspots' && englishItem === 'MAP') ||
-            (currentView === 'insights' && englishItem === 'INSIGHTS') ||
-            (currentView === 'profiles' && englishItem === 'PROFILES') ||
-            (currentView === 'finance' && englishItem === 'FINANCE') ||
-            (currentView === 'forecast' && englishItem === 'FORECAST') ||
-            (currentView === 'investigation' && englishItem === 'CASE INVESTIGATION') ||
-            (currentView === 'audit' && englishItem === 'AUDIT');
+        {NAV_TABS.filter((tb) => (ROLE_TABS[user?.role || 'officer'] || ROLE_TABS.officer).includes(tb.en))
+          .map((tb) => {
+          const englishItem = tb.en;
+          const item = currentLanguage === 'en' ? tb.en : tb.kn;
+          const isActive = VIEW_TO_TAB[currentView] === englishItem;
           return (
             <div
-              key={idx}
+              key={englishItem}
               onClick={() => handleMenuClick(englishItem)}
               style={{
                 padding: '13px 16px',

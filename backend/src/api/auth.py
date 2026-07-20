@@ -43,10 +43,29 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hmac.compare_digest(hash_password(password), password_hash)
 
 
-# Demo officer accounts with HASHED passwords (plaintext is never stored).
-# In production these would live in a database. Roles drive access control.
-#   officer / ksp@2024     admin / admin@2024
+# Demo accounts with HASHED passwords (plaintext is never stored). Roles drive
+# access control (Area 10). The four operational roles map to the personas in
+# the problem statement; officer/admin are kept for backward compatibility.
+#   investigator / invest@2024   analyst / analyst@2024
+#   supervisor  / super@2024     policymaker / policy@2024
+#   officer     / ksp@2024       admin / admin@2024
 OFFICERS = {
+    "investigator": {
+        "password_hash": "9cf976de90313d7da2f1bf4283cc55cc6f2cfa02347dba054c393eecf8cb064d",
+        "name": "Investigating Officer", "role": "investigator",
+    },
+    "analyst": {
+        "password_hash": "2fa958ce947a6c1730f5175e60d2fb7a0af279b3fb3b85117ba67a2fc795da6b",
+        "name": "Crime Analyst", "role": "analyst",
+    },
+    "supervisor": {
+        "password_hash": "5df7e553969f962f67818d0d9aeeb3b448069ae5fb09907ef6ebdf3d07fc443f",
+        "name": "Supervisor", "role": "supervisor",
+    },
+    "policymaker": {
+        "password_hash": "a5a63fadeb7ddc7333a062bc92853e78614ee67fd4eeb5e75b94d4b8340dcb48",
+        "name": "Policymaker", "role": "policymaker",
+    },
     "officer": {
         "password_hash": "0e64b899fd9584132a49edbf235e168a00cb38ade5ab4f5a94266095e4c9c6a6",
         "name": "Duty Officer", "role": "officer",

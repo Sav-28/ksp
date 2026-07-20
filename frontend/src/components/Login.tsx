@@ -120,9 +120,11 @@ const Login = ({ onLogin, language }: { onLogin: (user: AuthUser) => void; langu
             marginTop: '20px', padding: '12px', backgroundColor: '#f5f5f5',
             borderRadius: '6px', fontSize: '12px', color: '#666', lineHeight: 1.6
           }}>
-            <strong>{t('Demo credentials:', 'ಡೆಮೋ ರುಜುವಾತುಗಳು:')}</strong><br />
-            officer / ksp@2024<br />
-            admin / admin@2024
+            <strong>{t('Demo logins (role-based access):', 'ಡೆಮೋ ಲಾಗಿನ್‌ಗಳು (ಪಾತ್ರ ಆಧಾರಿತ):')}</strong><br />
+            investigator / invest@2024<br />
+            analyst / analyst@2024<br />
+            supervisor / super@2024<br />
+            policymaker / policy@2024
           </div>
         </form>
       </div>
