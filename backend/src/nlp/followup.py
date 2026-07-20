@@ -50,18 +50,23 @@ def detect_detail_request(text: str) -> Optional[str]:
     """
     t = text.lower()
 
+    # Whole-word match, so short keywords like "io" don't match inside other
+    # words (e.g. "io" inside "sect-io-n" was wrongly triggering detail lookups).
+    def _has_word(words):
+        return any(re.search(r'\b' + re.escape(w) + r'\b', t) for w in words)
+
     has_fir = extract_fir_number(text) is not None
     # A short question referencing a case ("who was accused?") also qualifies
     # even without an explicit FIR (it relies on conversation context).
     asks_who = "who" in t or "whom" in t
 
-    if any(w in t for w in _ACCUSED_WORDS):
+    if _has_word(_ACCUSED_WORDS):
         return "accused"
-    if any(w in t for w in _VICTIM_WORDS):
+    if _has_word(_VICTIM_WORDS):
         return "victim"
-    if any(w in t for w in _WITNESS_WORDS):
+    if _has_word(_WITNESS_WORDS):
         return "witness"
-    if any(w in t for w in _STATUS_WORDS):
+    if _has_word(_STATUS_WORDS):
         return "status"
     if has_fir and any(w in t for w in _DETAIL_WORDS):
         return "full"

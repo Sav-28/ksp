@@ -74,6 +74,16 @@ class IntentClassifier:
             "counterfeiting": "489"
         }
 
+        # IPC section -> crime type, so users can query by legal section
+        # (e.g. "cases under IPC 302", "section 379 in Mysuru"). Covers the
+        # official section codes plus common legacy variants.
+        self.ipc_to_type = {
+            "379": "Theft", "302": "Murder", "356": "Snatching", "392": "Robbery",
+            "351": "Assault", "454": "Burglary", "146": "Rioting", "420": "Cheating",
+            "463": "Forgery", "489a": "Counterfeiting", "415": "Cheating",
+            "489": "Counterfeiting",
+        }
+
     def _load_model(self) -> None:
         """Load a pre-trained model if it exists."""
         if os.path.exists(self.model_path):
@@ -166,7 +176,7 @@ class IntentClassifier:
             "crime", "crimes", "theft", "thefts", "murder", "murders", "robbery",
             "robberies", "snatch", "burglary", "burglaries", "assault", "riot",
             "cheating", "forgery", "counterfeit", "case", "cases", "fir", "record",
-            "records", "incident", "offence", "offense",
+            "records", "incident", "offence", "offense", "ipc", "section", "u/s",
         ])
 
         # BREAKDOWN: aggregation / grouping / ranking signals
@@ -275,8 +285,10 @@ class IntentClassifier:
         if date_range:
             entities["date_range"] = date_range
 
-        # Extract crime type
+        # Extract crime type (by name, or by IPC/section code)
         crime_type = self._extract_crime_type(text_lower)
+        if not crime_type:
+            crime_type = self._extract_ipc_section(text_lower)
         if crime_type:
             entities["crime_type"] = crime_type
 
@@ -424,6 +436,18 @@ class IntentClassifier:
                 }
 
         return None
+
+    def _extract_ipc_section(self, text: str) -> str:
+        """
+        Map an IPC/legal section reference to a crime type so users can query
+        by section — e.g. "cases under IPC 302", "section 379", "u/s 420".
+        Returns the crime type (e.g. "Murder") or None.
+        """
+        m = re.search(r'\b(?:ipc|section|sec|u/?s|under)\s*\.?\s*(\d{2,3}[a-dA-D]?)\b', text, re.I)
+        if not m:
+            return None
+        code = m.group(1).lower().replace(" ", "")
+        return self.ipc_to_type.get(code)
 
     def _extract_crime_type(self, text: str) -> str:
         """Extract crime type from text."""
