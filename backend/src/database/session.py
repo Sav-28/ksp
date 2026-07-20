@@ -54,3 +54,40 @@ def create_tables():
     except Exception:
         # Official schema is additive; never block startup if it can't build.
         pass
+    create_views()
+
+
+# SQL that projects the normalized official FIR tables back into the flat
+# "crimes" shape the analytics/query layer reads. This is the compatibility
+# layer that lets the app run ON the official schema without rewriting every
+# query: readers select FROM v_crimes instead of the old crimes table.
+_V_CRIMES_SQL = """
+CREATE VIEW v_crimes AS
+SELECT cm.CaseMasterID          AS id,
+       cm.CrimeNo               AS fir_number,
+       cm.CrimeRegisteredDate   AS date_occurred,
+       d.DistrictName           AS district,
+       d.DistrictName           AS taluk,
+       u.UnitName               AS police_station,
+       sh.CrimeHeadName         AS crime_type,
+       io.BriefFacts            AS description,
+       io.latitude              AS latitude,
+       io.longitude             AS longitude
+FROM CaseMaster cm
+LEFT JOIN CrimeSubHead sh     ON sh.CrimeSubHeadID = cm.CrimeMinorHeadID
+LEFT JOIN Unit u              ON u.UnitID          = cm.PoliceStationID
+LEFT JOIN District d          ON d.DistrictID      = u.DistrictID
+LEFT JOIN Inv_OccuranceTime io ON io.CaseMasterID  = cm.CaseMasterID
+"""
+
+
+def create_views():
+    """(Re)create compatibility views over the official FIR schema."""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP VIEW IF EXISTS v_crimes"))
+            conn.execute(text(_V_CRIMES_SQL.strip()))
+    except Exception:
+        # Views are read-optimizations; never block startup if they can't build.
+        pass

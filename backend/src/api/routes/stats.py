@@ -40,15 +40,16 @@ async def get_stats(
     }
     """
     try:
-        # Total crimes
-        total_crimes = db.execute(text("SELECT COUNT(*) FROM crimes")).scalar() or 0
+        # All reads go through v_crimes — the compatibility view over the
+        # official FIR schema — so the dashboard runs on the official tables.
+        total_crimes = db.execute(text("SELECT COUNT(*) FROM v_crimes")).scalar() or 0
 
         # Distinct districts / crime types
         total_districts = db.execute(
-            text("SELECT COUNT(DISTINCT district) FROM crimes WHERE district IS NOT NULL")
+            text("SELECT COUNT(DISTINCT district) FROM v_crimes WHERE district IS NOT NULL")
         ).scalar() or 0
         total_crime_types = db.execute(
-            text("SELECT COUNT(DISTINCT crime_type) FROM crimes WHERE crime_type IS NOT NULL")
+            text("SELECT COUNT(DISTINCT crime_type) FROM v_crimes WHERE crime_type IS NOT NULL")
         ).scalar() or 0
 
         # Breakdown by district
@@ -56,7 +57,7 @@ async def get_stats(
             db.execute(text(
                 """
                 SELECT district AS label, COUNT(*) AS count
-                FROM crimes
+                FROM v_crimes
                 WHERE district IS NOT NULL AND district != ''
                 GROUP BY district
                 ORDER BY count DESC
@@ -69,7 +70,7 @@ async def get_stats(
             db.execute(text(
                 """
                 SELECT crime_type AS label, COUNT(*) AS count
-                FROM crimes
+                FROM v_crimes
                 WHERE crime_type IS NOT NULL AND crime_type != ''
                 GROUP BY crime_type
                 ORDER BY count DESC
@@ -82,7 +83,7 @@ async def get_stats(
             db.execute(text(
                 """
                 SELECT strftime('%Y-%m', date_occurred) AS label, COUNT(*) AS count
-                FROM crimes
+                FROM v_crimes
                 WHERE date_occurred IS NOT NULL
                 GROUP BY label
                 ORDER BY label ASC
@@ -93,7 +94,7 @@ async def get_stats(
         # Recent records (latest 10 by date)
         recent_proxy = db.execute(text(
             """
-            SELECT * FROM crimes
+            SELECT * FROM v_crimes
             ORDER BY date_occurred DESC
             LIMIT 10
             """

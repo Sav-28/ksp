@@ -23,28 +23,37 @@ async def get_hotspots(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Geographic crime distribution for the hotspot map + emerging surges."""
-    crimes = db.query(Crime).all()
+    """Geographic crime distribution for the hotspot map + emerging surges.
 
+    Reads go through v_crimes — the compatibility view over the official FIR
+    schema — so the hotspot map runs on the official tables.
+    """
     # Individual points for the scatter/heat map
     points: List[Dict[str, Any]] = []
-    for c in crimes:
-        if c.latitude is not None and c.longitude is not None:
-            points.append({
-                "lat": c.latitude,
-                "lng": c.longitude,
-                "district": c.district,
-                "crime_type": c.crime_type,
-                "fir": c.fir_number,
-                "date": str(c.date_occurred),
-            })
+    point_rows = db.execute(text(
+        """
+        SELECT latitude, longitude, district, crime_type, fir_number, date_occurred
+        FROM v_crimes
+        WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+        """
+    )).fetchall()
+    for r in point_rows:
+        m = r._mapping
+        points.append({
+            "lat": m["latitude"],
+            "lng": m["longitude"],
+            "district": m["district"],
+            "crime_type": m["crime_type"],
+            "fir": m["fir_number"],
+            "date": str(m["date_occurred"]),
+        })
 
     # District hotspots: count + centroid
     district_rows = db.execute(text(
         """
         SELECT district AS d, COUNT(*) AS cnt,
                AVG(latitude) AS lat, AVG(longitude) AS lng
-        FROM crimes
+        FROM v_crimes
         WHERE district IS NOT NULL AND district != ''
         GROUP BY district
         ORDER BY cnt DESC
@@ -65,7 +74,7 @@ async def get_hotspots(
     def counts_between(start, end):
         rows = db.execute(text(
             """
-            SELECT district AS d, COUNT(*) AS cnt FROM crimes
+            SELECT district AS d, COUNT(*) AS cnt FROM v_crimes
             WHERE date_occurred >= :start AND date_occurred < :end
               AND district IS NOT NULL
             GROUP BY district

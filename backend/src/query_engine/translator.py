@@ -59,17 +59,20 @@ class QueryTranslator:
             "month": "strftime('%Y-%m', date_occurred)"
         }
 
-        # Build base query
+        # Build base query. Reads go through v_crimes — the compatibility view
+        # over the official FIR schema (CaseMaster + CrimeSubHead + District +
+        # Unit + Inv_OccuranceTime) — so the query engine runs on the official
+        # tables while keeping the flat column names below.
         if intent == "SHOW_CRIMES":
-            base_sql = "SELECT * FROM crimes"
+            base_sql = "SELECT * FROM v_crimes"
             limit_clause = " LIMIT :limit"
         elif intent == "COUNT_CRIMES":
-            base_sql = "SELECT COUNT(*) FROM crimes"
+            base_sql = "SELECT COUNT(*) FROM v_crimes"
             limit_clause = ""
         else:  # BREAKDOWN_CRIMES
             group_dim = entities.get("group_by", "district")
             group_expr = group_by_map.get(group_dim, "district")
-            base_sql = f"SELECT {group_expr} AS label, COUNT(*) AS count FROM crimes"
+            base_sql = f"SELECT {group_expr} AS label, COUNT(*) AS count FROM v_crimes"
             limit_clause = ""
 
         # Build WHERE conditions
