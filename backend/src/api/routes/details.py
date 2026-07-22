@@ -27,6 +27,7 @@ def _person_brief(p: Person) -> Dict[str, Any]:
         "district": p.district,
         "occupation": p.occupation,
         "risk_score": p.risk_score,
+        "photo": p.photo,
     }
 
 
@@ -99,6 +100,7 @@ async def get_person_detail(
     return {
         "id": person.id,
         "name": person.full_name,
+        "photo": person.photo,
         "demographics": {
             "age": person.age,
             "gender": person.gender,

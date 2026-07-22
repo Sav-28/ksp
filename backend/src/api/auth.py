@@ -190,3 +190,18 @@ def require_role(*allowed_roles: str):
             )
         return username
     return _checker
+
+
+# --- Write-capability roles (Area 10) -------------------------------------
+# Roles allowed to REGISTER a new FIR. Analysts and policymakers consume
+# intelligence but do not file crimes.
+CAN_REGISTER_ROLES = ("investigator", "officer", "supervisor", "admin")
+# Roles allowed to UPDATE an existing investigation's status/outcome.
+CAN_UPDATE_ROLES = ("investigator", "supervisor", "admin")
+
+
+def can_register(username: str) -> bool:
+    """Whether the given user's role may register a new FIR."""
+    if not AUTH_REQUIRED:
+        return True
+    return get_user_role(username) in CAN_REGISTER_ROLES

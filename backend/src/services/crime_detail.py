@@ -53,6 +53,7 @@ def _person_brief(p: Person) -> Dict[str, Any]:
         "district": p.district,
         "occupation": p.occupation,
         "risk_score": p.risk_score,
+        "photo": p.photo,
     }
 
 

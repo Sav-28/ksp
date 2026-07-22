@@ -324,6 +324,7 @@ async def offender_profile(
     return {
         "person_id": p.id,
         "name": p.full_name,
+        "photo": p.photo,
         "demographics": {
             "age": p.age, "gender": p.gender, "occupation": p.occupation,
             "education": p.education_level, "socio_economic_status": p.socio_economic_status,

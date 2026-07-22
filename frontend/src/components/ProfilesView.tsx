@@ -17,6 +17,7 @@ interface Offender {
 interface Profile {
   person_id: number;
   name: string;
+  photo?: string | null;
   demographics: any;
   risk_score: number;
   risk_level: string;
@@ -151,10 +152,21 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
           ) : (
             <div style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                <div>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: '#1a237e' }}>👤 {localizePersonName(profile.name, language)}</div>
+                <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+                  <div style={{
+                    width: 72, height: 72, borderRadius: 10, overflow: 'hidden', flexShrink: 0,
+                    border: '1px solid #cfd8dc', background: '#eceff1',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {profile.photo
+                      ? <img src={profile.photo} alt={profile.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <span style={{ fontSize: 34, color: '#90a4ae' }}>👤</span>}
+                  </div>
+                  <div>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: '#1a237e' }}>{localizePersonName(profile.name, language)}</div>
                   <div style={{ fontSize: 13, color: '#666' }}>
                     {profile.demographics.age} · {profile.demographics.gender} · {localizeDistrict(profile.demographics.district, language)} · {profile.demographics.occupation}
+                  </div>
                   </div>
                 </div>
                 <div style={{ textAlign: 'center', background: riskColor(profile.risk_level), color: '#fff', borderRadius: 10, padding: '8px 14px' }}>

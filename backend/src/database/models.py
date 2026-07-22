@@ -59,6 +59,9 @@ class Crime(Base):
     description = Column(Text)
     latitude = Column(Float)
     longitude = Column(Float)
+    # Governance/traceability: which officer registered this FIR (Area 10).
+    created_by = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
 
     # Phase 4 relationships to the normalized intelligence tables
     people = relationship("CasePerson", back_populates="crime")
@@ -118,6 +121,9 @@ class Person(Base):
     phone_masked = Column(String(20))           # e.g. "98XXXXXX21"
     latitude = Column(Float)
     longitude = Column(Float)
+    # Optional mugshot/photo as a base64 data URL (data:image/jpeg;base64,...).
+    # Stored in the DB so it persists on ephemeral/read-only hosts (Catalyst).
+    photo = Column(Text)
 
     # Risk score (0-100), computed during offender profiling (Phase 9).
     risk_score = Column(Float, default=0.0)
