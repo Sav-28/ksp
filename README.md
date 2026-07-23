@@ -24,7 +24,7 @@ patterns, tracing financial trails, and forecasting emerging crime.
 | 7 | Financial Crime & Transaction Link Analysis | ✅ | FINANCE tab |
 | 8 | Crime Forecasting & Early Warning | ✅ | FORECAST tab |
 | 9 | Explainable AI & Transparent Analytics | ✅ | "Why this answer?" on every reply |
-| 10 | Secure Role-Based Access & Governance | ✅ | 4 roles + AUDIT tab (supervisor) |
+| 10 | Secure Role-Based Access & Governance | ✅ | role-gated tabs, FIR registration & case-close RBAC, AUDIT tab |
 
 The database implements the **official Karnataka Police FIR schema** (28 normalized
 tables — `CaseMaster`, `Victim`, `Accused`, `ComplainantDetails`, `ArrestSurrender`,
@@ -60,16 +60,31 @@ and one-click conversation export to PDF.
 **Analytics dashboard** — totals and breakdowns by district, crime type, and
 month, with trend and bar charts.
 
+**FIR registration (write workflow)** — role-gated form to register a new FIR in
+any of Karnataka's **31 districts** (with real police stations): crime details,
+an **interactive Leaflet map picker** (click / landmark autocomplete / GPS) to
+capture the exact location, investigating officer with **rank & designation**,
+**accused mugshot photos**, and **gang tagging** per accused. It generates the
+official 18-digit `CrimeNo`, mirrors into the `CaseMaster` schema, and flows
+straight into the dashboard, map, network, and forecasting. A soft **jurisdiction
+warning** flags a pin that falls outside the selected district (Zero-FIR aware).
+
 **Case Investigation** — enter a Crime No (FIR) to pull the full dossier: accused,
 victims, incident location with **coordinates + embedded map and "Get Directions"**,
-and police/officer/court details from the official schema.
+and police/officer/court details from the official schema. Investigators can
+**advance the investigation status**, and supervisors/admins can **close a case**
+(two-tier RBAC), synced to the official schema.
 
 **Legal-section queries** — ask by IPC/section ("cases under IPC 302", "section 379
 in Mysuru", "u/s 420") and the engine maps it to the crime type.
 
-**Criminal network analysis** — force-directed graph **grounded in real co-accused
-cases**: every edge traces to the actual linking Crime No(s) (hover to see them),
-with an offender **search box** and organized-crime clustering.
+**Criminal network analysis** — clean **radial hub-and-spoke graph** grounded in
+real co-accused cases: the focus person sits at the centre, direct links form an
+inner ring and second-degree links an outer ring, with a **direct-link count** on
+the node and a stats strip. Every edge traces to the actual linking Crime No(s)
+(hover to see them). Registering an FIR with multiple accused **auto-creates the
+network links**, and gang tagging feeds organized-crime clustering. Includes an
+offender search box and click-to-re-centre.
 
 **Hotspot map** — geographic crime distribution with district hotspots and
 90-day emerging-surge alerts.
@@ -166,10 +181,11 @@ frontend/src/
 ```bash
 cd backend
 pip install -r requirements.txt
-python generate_sample_data.py     # first run — seed crime incidents
-python generate_phase4_data.py     # first run — seed people/gangs/finance
+python generate_narrative_data.py   # first run — seed crimes, persons, gangs, FIRs, finance
+python migrate_to_fir_schema.py     # first run — project into the official FIR schema
 python src/nlp/train_model.py       # first run — train the NLP model
 python main.py                      # serves at http://localhost:8004
+# (main.py also auto-seeds + projects on first boot if the DB is empty)
 ```
 
 ### Frontend
@@ -193,7 +209,10 @@ ollama pull qwen2.5:3b
 | supervisor | super@2024 | supervisor | everything + AUDIT |
 | policymaker | policy@2024 | policymaker | Dashboard, Map, Insights, Forecast (high-level) |
 
-(Legacy `officer / ksp@2024` and `admin / admin@2024` still work.)
+Write permissions: **investigator, officer, supervisor, admin** can register FIRs
+and advance status; **only supervisor/admin** can close a case; **analyst and
+policymaker are read-only**. (Legacy `officer / ksp@2024` and `admin / admin@2024`
+still work.)
 
 ---
 
@@ -220,6 +239,10 @@ Frontend: `REACT_APP_API_BASE` (default `http://localhost:8004`).
 | POST | `/api/login` | — | Authenticate, returns token |
 | POST | `/api/chat` | ✓ | Conversational query (+ follow-ups, detail, summary) |
 | GET | `/api/stats` | ✓ | Dashboard analytics |
+| GET | `/api/reference/registration`, `/api/gangs` | register roles | Form dropdown data + gang search |
+| POST | `/api/crimes` | register roles | Register a new FIR (write) |
+| PATCH | `/api/crimes/{crimeNo}` | investigator/supervisor/admin | Update status / close case |
+| PATCH | `/api/person/{id}/photo` | register roles | Add/replace an accused photo |
 | GET | `/api/crime/{crimeNo}` | ✓ | Full case dossier (Case Investigation) |
 | GET | `/api/network/overview`, `/api/network/search`, `/api/network/person/{id}` | ✓ | Grounded co-accused network + offender search |
 | GET | `/api/hotspots`, `/api/patterns/mo`, `/api/trends/seasonal` | ✓ | Hotspots, modus operandi, seasonal/festival trends |
