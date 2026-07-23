@@ -40,6 +40,7 @@ interface RefData {
   officer_ranks: string[];
   officer_designations: string[];
   person_roles: string[];
+  gang_roles: string[];
   genders: string[];
   education_levels: string[];
   socio_economic_statuses: string[];
@@ -56,11 +57,14 @@ interface PersonRow {
   socio_economic_status: string;
   phone_masked: string;
   photo: string; // base64 data URL, '' if none
+  gang_name: string; // organized group (accused); '' if none
+  gang_role: string; // Leader / Member / Associate
 }
 
 const emptyPerson = (role = 'accused'): PersonRow => ({
   role, full_name: '', district: '', age: '', gender: '',
   occupation: '', education_level: '', socio_economic_status: '', phone_masked: '', photo: '',
+  gang_name: '', gang_role: 'Member',
 });
 
 // Read an image file, downscale to maxDim, and return a compressed JPEG data URL.
@@ -109,6 +113,8 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
   const [arrestMade, setArrestMade] = useState(false);
 
   const [persons, setPersons] = useState<PersonRow[]>([emptyPerson('complainant')]);
+  // Known gangs (for the accused gang autocomplete datalist).
+  const [gangs, setGangs] = useState<{ id: number; name: string; activity?: string }[]>([]);
 
   // Precise crime location (picked on the map / geocoded / GPS).
   const [lat, setLat] = useState<number | null>(null);
@@ -282,6 +288,18 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
     if (user?.name && !io) setIo(user.name);
   }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Load known gangs for the accused gang autocomplete.
+  useEffect(() => {
+    if (!ref) return;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/gangs');
+        const data = await res.json();
+        setGangs(data.gangs || []);
+      } catch { /* non-fatal — officer can still type a new gang name */ }
+    })();
+  }, [ref]);
+
   const stations = district && ref ? (ref.police_stations[district] || []) : [];
 
   const updatePerson = (idx: number, field: keyof PersonRow, value: string) => {
@@ -350,6 +368,13 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
         socio_economic_status: p.socio_economic_status || null,
         phone_masked: p.phone_masked || null,
         photo: p.photo || null,
+        // Gang tagging (accused only). Match an existing gang by name → gang_id,
+        // otherwise send gang_name so the backend creates a new organized group.
+        gang_id: p.role === 'accused' && p.gang_name.trim()
+          ? (gangs.find((g) => g.name.toLowerCase() === p.gang_name.trim().toLowerCase())?.id ?? null)
+          : null,
+        gang_name: p.role === 'accused' && p.gang_name.trim() ? p.gang_name.trim() : null,
+        gang_role: p.role === 'accused' && p.gang_name.trim() ? p.gang_role : null,
       })),
     };
 
@@ -397,6 +422,13 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
             {' · '}{t('accused', 'ಆರೋಪಿ')}: {result.detail?.accused?.length || 0}
             {', '}{t('victims', 'ಬಲಿಪಶು')}: {result.detail?.victims?.length || 0}
           </div>
+          {result.network && (result.network.co_accused_links > 0 || (result.network.gangs_linked || []).length > 0) && (
+            <div style={{ marginTop: 6, fontSize: 13, color: '#4a148c' }}>
+              🕸️ {result.network.co_accused_links > 0 && t(`${result.network.co_accused_links} co-accused network link(s) created`, `${result.network.co_accused_links} ಸಹ-ಆರೋಪಿ ಸಂಪರ್ಕ ರಚಿಸಲಾಗಿದೆ`)}
+              {result.network.co_accused_links > 0 && (result.network.gangs_linked || []).length > 0 && ' · '}
+              {(result.network.gangs_linked || []).length > 0 && t(`Gang(s): ${result.network.gangs_linked.join(', ')}`, `ಗ್ಯಾಂಗ್: ${result.network.gangs_linked.join(', ')}`)}
+            </div>
+          )}
         </div>
       )}
 
@@ -623,8 +655,42 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
                 </select>
               </Field>
             </div>
+
+            {/* Gang / organized-group tagging — accused only (feeds the network) */}
+            {p.role === 'accused' && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed #e0e0e0' }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: '#6a1b9a', marginBottom: 8 }}>
+                  🕸️ {t('Gang / Organized group (optional)', 'ಗ್ಯಾಂಗ್ / ಸಂಘಟಿತ ಗುಂಪು (ಐಚ್ಛಿಕ)')}
+                </div>
+                <div style={grid}>
+                  <Field label={t('Gang name', 'ಗ್ಯಾಂಗ್ ಹೆಸರು')}>
+                    <input list="ksp-gangs" value={p.gang_name}
+                      onChange={(e) => updatePerson(idx, 'gang_name', e.target.value)}
+                      placeholder={t('Search or type a new group', 'ಹುಡುಕಿ ಅಥವಾ ಹೊಸ ಗುಂಪು ಟೈಪ್ ಮಾಡಿ')}
+                      style={input} />
+                  </Field>
+                  {p.gang_name.trim() !== '' && (
+                    <Field label={t('Role in gang', 'ಗ್ಯಾಂಗ್‌ನಲ್ಲಿ ಪಾತ್ರ')}>
+                      <select value={p.gang_role} onChange={(e) => updatePerson(idx, 'gang_role', e.target.value)} style={input}>
+                        {ref.gang_roles.map((r) => <option key={r} value={r}>{r}</option>)}
+                      </select>
+                    </Field>
+                  )}
+                </div>
+                {p.gang_name.trim() !== '' && !gangs.some((g) => g.name.toLowerCase() === p.gang_name.trim().toLowerCase()) && (
+                  <div style={{ fontSize: 11, color: '#8d6e00', marginTop: 4 }}>
+                    ➕ {t('New group — it will be created and added to the network.',
+                          'ಹೊಸ ಗುಂಪು — ಇದನ್ನು ರಚಿಸಿ ಜಾಲಕ್ಕೆ ಸೇರಿಸಲಾಗುತ್ತದೆ.')}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
+        {/* Shared datalist of known gangs for the autocomplete inputs above */}
+        <datalist id="ksp-gangs">
+          {gangs.map((g) => <option key={g.id} value={g.name} />)}
+        </datalist>
       </div>
 
       <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>

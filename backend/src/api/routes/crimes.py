@@ -14,17 +14,20 @@ admins may register; analysts and policymakers may not (HTTP 403).
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 from typing import Dict, Any, List, Optional
 from datetime import datetime, date
 import logging
 
 from src.database.session import get_db
-from src.database.models import Crime, FIRDetails, Person, CasePerson, AuditLog
+from src.database.models import (
+    Crime, FIRDetails, Person, CasePerson, AuditLog,
+    Relationship, Gang, GangMember,
+)
 from src.database import models_fir as F
 from src.api.auth import (
-    require_role, get_user_role, CAN_REGISTER_ROLES, CAN_UPDATE_ROLES,
-    CAN_CLOSE_ROLES,
+    require_role, get_user_role, get_current_user,
+    CAN_REGISTER_ROLES, CAN_UPDATE_ROLES, CAN_CLOSE_ROLES,
 )
 from src.services.crime_detail import get_crime_detail
 from src.data.karnataka import DISTRICTS, DISTRICT_COORDS, POLICE_STATIONS
@@ -72,6 +75,7 @@ TERMINAL_STATUSES = {"Closed", "Convicted", "Acquitted"}
 # Default case outcome to record when moving to a terminal status.
 _OUTCOME_FOR_STATUS = {"Closed": "Closed", "Convicted": "Convicted", "Acquitted": "Acquitted"}
 PERSON_ROLES = ["accused", "victim", "witness", "complainant"]
+GANG_ROLES = ["Leader", "Member", "Associate"]
 GENDERS = ["Male", "Female", "Other"]
 
 # Accepted photo formats and max decoded size (~2 MB).
@@ -115,10 +119,29 @@ async def registration_reference(
         "officer_ranks": OFFICER_RANKS,
         "officer_designations": OFFICER_DESIGNATIONS,
         "person_roles": PERSON_ROLES,
+        "gang_roles": GANG_ROLES,
         "genders": GENDERS,
         "education_levels": EDUCATION,
         "socio_economic_statuses": SES,
     }
+
+
+@router.get("/gangs")
+async def list_gangs(
+    search: str = "",
+    db: Session = Depends(get_db),
+    username: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Search known gangs/organized groups (for the registration autocomplete)."""
+    q = db.query(Gang)
+    if search.strip():
+        q = q.filter(Gang.name.ilike(f"%{search.strip()}%"))
+    gangs = q.order_by(Gang.name).limit(50).all()
+    return {"gangs": [
+        {"id": g.id, "name": g.name, "activity": g.primary_activity,
+         "district": g.base_district, "active": g.active}
+        for g in gangs
+    ]}
 
 
 def _next_id(db: Session, model, pk) -> int:
@@ -325,6 +348,62 @@ def _resolve_person(db: Session, spec: Dict[str, Any]) -> Person:
     return person
 
 
+def _link_gang(db: Session, person: Person, spec: Dict[str, Any], crime: Crime) -> Optional[str]:
+    """Attach a person to a gang (existing by id/name, or newly created).
+    Returns the gang name if linked, else None. Feeds organized-crime detection."""
+    gang_id = spec.get("gang_id")
+    gang_name = (spec.get("gang_name") or "").strip()
+    if not gang_id and not gang_name:
+        return None
+
+    gang = None
+    if gang_id:
+        gang = db.get(Gang, gang_id)
+    if not gang and gang_name:
+        gang = db.query(Gang).filter(func.lower(Gang.name) == gang_name.lower()).first()
+        if not gang:
+            gang = Gang(name=gang_name, base_district=crime.district,
+                        primary_activity=crime.crime_type, active=True)
+            db.add(gang)
+            db.flush()
+    if not gang:
+        return None
+
+    already = db.query(GangMember).filter(
+        GangMember.gang_id == gang.id, GangMember.person_id == person.id
+    ).first()
+    if not already:
+        db.add(GangMember(gang_id=gang.id, person_id=person.id,
+                          role=(spec.get("gang_role") or "Member")))
+    return gang.name
+
+
+def _create_coaccused_edges(db: Session, accused_ids: List[int], crime_id: int) -> int:
+    """Create undirected 'co_accused' relationship edges between every pair of
+    accused in this FIR — the network builds itself from co-arrest data. If an
+    edge already exists, its strength is incremented (repeat co-offending)."""
+    made = 0
+    unique_ids = list(dict.fromkeys(accused_ids))  # de-dupe, preserve order
+    for i in range(len(unique_ids)):
+        for j in range(i + 1, len(unique_ids)):
+            a, b = unique_ids[i], unique_ids[j]
+            existing = db.query(Relationship).filter(
+                Relationship.relationship_type == "co_accused",
+                or_(
+                    and_(Relationship.person_a_id == a, Relationship.person_b_id == b),
+                    and_(Relationship.person_a_id == b, Relationship.person_b_id == a),
+                ),
+            ).first()
+            if existing:
+                existing.strength = (existing.strength or 1.0) + 1.0
+            else:
+                db.add(Relationship(person_a_id=a, person_b_id=b,
+                                    relationship_type="co_accused",
+                                    crime_id=crime_id, strength=1.0))
+                made += 1
+    return made
+
+
 def _parse_date(value: Optional[str], field: str) -> date:
     if not value:
         raise HTTPException(status_code=422, detail=f"'{field}' is required")
@@ -416,15 +495,23 @@ async def register_crime(
         )
 
         linked = []
+        accused_ids: List[int] = []
+        gangs_linked: List[str] = []
         for spec in persons_in:
             person = _resolve_person(db, spec)
-            link = CasePerson(
-                crime_id=crime.id,
-                person_id=person.id,
-                role=(spec.get("role") or "").lower(),
-            )
+            role = (spec.get("role") or "").lower()
+            link = CasePerson(crime_id=crime.id, person_id=person.id, role=role)
             db.add(link)
-            linked.append({"id": person.id, "name": person.full_name, "role": link.role})
+            linked.append({"id": person.id, "name": person.full_name, "role": role})
+            if role == "accused":
+                accused_ids.append(person.id)
+            # Gang / organized-group tagging (any role, typically accused).
+            gname = _link_gang(db, person, spec, crime)
+            if gname:
+                gangs_linked.append(gname)
+
+        # Network: auto-link co-accused so the criminal network builds itself.
+        edges_made = _create_coaccused_edges(db, accused_ids, crime.id)
 
         # Governance: audit the write.
         db.add(AuditLog(
@@ -448,7 +535,15 @@ async def register_crime(
 
     logging.info(f"FIR {fir_number} registered by '{username}'")
     detail = get_crime_detail(db, fir_number)
-    return {"fir_number": fir_number, "created_by": username, "detail": detail}
+    return {
+        "fir_number": fir_number,
+        "created_by": username,
+        "detail": detail,
+        "network": {
+            "co_accused_links": edges_made,
+            "gangs_linked": sorted(set(gangs_linked)),
+        },
+    }
 
 
 def _sync_official_status(db: Session, crime: Crime, status_name: str) -> None:
