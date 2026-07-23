@@ -18,6 +18,11 @@ import {
   localizePlace, localizeLabel, localizePersonName, buildAnswer
 } from '../locale';
 
+// Official Emblem of Karnataka (Seal) — served via Wikimedia's stable FilePath
+// endpoint (https://en.wikipedia.org/wiki/Emblem_of_Karnataka). Falls back to a
+// "KSP" text badge if the image can't load.
+const KARNATAKA_EMBLEM_URL = 'https://commons.wikimedia.org/wiki/Special:FilePath/Seal%20of%20Karnataka.png?width=140';
+
 type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'investigation' | 'register' | 'audit';
 
 // Shared data types
@@ -319,17 +324,24 @@ const GovHeader = ({
           {/* Emblem — double-ring official badge */}
           <div style={{
             width: '62px', height: '62px', borderRadius: '50%',
-            background: 'radial-gradient(circle at 50% 35%, #283593, #1a237e)',
+            background: '#ffffff',
             border: '2px solid #ffb300',
             boxShadow: '0 0 0 3px #ffffff, 0 2px 6px rgba(0,0,0,0.2)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#ffd54f', fontWeight: 'bold', fontSize: '13px', textAlign: 'center',
-            lineHeight: 1.05, cursor: 'pointer', flexShrink: 0
+            color: '#1a237e', fontWeight: 'bold', fontSize: '15px', textAlign: 'center',
+            lineHeight: 1.05, cursor: 'pointer', flexShrink: 0, overflow: 'hidden'
           }}
           onClick={() => onNavigate('chat')}
-          title={currentLanguage === 'en' ? 'Home' : 'ಮುಖಪುಟ'}
+          title={currentLanguage === 'en' ? 'Emblem of Karnataka — Home' : 'ಕರ್ನಾಟಕ ಲಾಂಛನ — ಮುಖಪುಟ'}
           >
-            KSP
+            <img src={KARNATAKA_EMBLEM_URL} alt="Emblem of Karnataka"
+              style={{ width: '82%', height: '82%', objectFit: 'contain' }}
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                const s = e.currentTarget.nextElementSibling as HTMLElement | null;
+                if (s) s.style.display = 'block';
+              }} />
+            <span style={{ display: 'none' }}>KSP</span>
           </div>
           <div>
             <div style={{ fontSize: '21px', fontWeight: 800, color: '#1a237e', lineHeight: '1.15', letterSpacing: '0.3px' }}>
@@ -789,7 +801,8 @@ const MessageBubble = ({ message, language, onCrimeClick, onPersonClick }:
         border: message.isUser ? '2px solid #1976d2' : '2px solid #e0e0e0',
         borderRadius: '8px',
         padding: '14px 18px',
-        maxWidth: isRich ? '85%' : '70%',
+        flex: isRich ? 1 : undefined,       // rich messages fill the pane width
+        maxWidth: isRich ? undefined : '70%',
         minWidth: '100px',
         boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         fontSize: '15px',
@@ -1101,6 +1114,10 @@ const ChatPage: React.FC = () => {
   const [currentLanguage, setCurrentLanguage] = useState<'en' | 'kn'>('en');
   const [currentView, setCurrentView] = useState<ViewType>('chat');
   const [user, setUser] = useState<AuthUser | null>(getUser());
+  // Right-hand detail panel in the AI Assistant (case / person drill-down).
+  const [detailPanel, setDetailPanel] = useState<
+    { kind: 'crime'; data: CrimeDetail } | { kind: 'person'; data: PersonProfile } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const conversationContext = useRef<any>(null);  // carries entities + last_fir across turns
 
@@ -1252,45 +1269,61 @@ const ChatPage: React.FC = () => {
   };
 
   // Click a crime card → fetch and append its full FIR detail
+  // Clicking a case/person opens it in the right-hand detail panel (on wide
+  // screens); on narrow screens it falls back to appending inline in the chat.
+  const wideScreen = () => typeof window !== 'undefined' && window.innerWidth >= 900;
+
   const showFirDetail = async (fir: string) => {
     if (!fir) return;
-    setMessages(prev => [...prev, { text: `Loading ${fir}...`, isUser: false, loading: true }]);
+    const wide = wideScreen();
+    if (wide) { setDetailLoading(true); setDetailPanel(null); }
+    else setMessages(prev => [...prev, { text: `Loading ${fir}...`, isUser: false, loading: true }]);
     try {
       const res = await apiFetch(`/api/crime/${fir}`);
       const detail = await res.json();
-      setMessages(prev => prev.slice(0, -1));
-      setMessages(prev => [...prev, {
-        text: `📁 ${currentLanguage === 'en' ? 'Full details for' : 'ಪೂರ್ಣ ವಿವರಗಳು'} ${fir}:`,
-        isUser: false,
-        intent: 'FIR_DETAIL',
-        detail,
-      }]);
       conversationContext.current = { ...(conversationContext.current || {}), last_fir: fir };
+      if (wide) {
+        setDetailPanel({ kind: 'crime', data: detail });
+        setDetailLoading(false);
+      } else {
+        setMessages(prev => prev.slice(0, -1));
+        setMessages(prev => [...prev, {
+          text: `📁 ${currentLanguage === 'en' ? 'Full details for' : 'ಪೂರ್ಣ ವಿವರಗಳು'} ${fir}:`,
+          isUser: false, intent: 'FIR_DETAIL', detail,
+        }]);
+      }
     } catch (e: any) {
-      setMessages(prev => prev.slice(0, -1));
+      setDetailLoading(false);
+      if (!wide) setMessages(prev => prev.slice(0, -1));
       if (e.message === 'UNAUTHORIZED') { handleSessionExpired(); return; }
-      setMessages(prev => [...prev, { text: `Could not load ${fir}.`, isUser: false }]);
+      if (!wide) setMessages(prev => [...prev, { text: `Could not load ${fir}.`, isUser: false }]);
     }
   };
 
-  // Click an accused on an FIR → fetch and append their full criminal dossier
+  // Click an accused → fetch their full criminal dossier (panel on wide screens)
   const showPersonDetail = async (personId: number) => {
     if (!personId) return;
-    setMessages(prev => [...prev, { text: 'Loading criminal profile...', isUser: false, loading: true }]);
+    const wide = wideScreen();
+    if (wide) { setDetailLoading(true); setDetailPanel(null); }
+    else setMessages(prev => [...prev, { text: 'Loading criminal profile...', isUser: false, loading: true }]);
     try {
       const res = await apiFetch(`/api/person/${personId}`);
       const profile = await res.json();
-      setMessages(prev => prev.slice(0, -1));
-      setMessages(prev => [...prev, {
-        text: `🕵️ ${currentLanguage === 'en' ? 'Full criminal profile for' : 'ಪೂರ್ಣ ಅಪರಾಧ ಪ್ರೊಫೈಲ್'} ${profile.name}:`,
-        isUser: false,
-        intent: 'PERSON_PROFILE',
-        personProfile: profile,
-      }]);
+      if (wide) {
+        setDetailPanel({ kind: 'person', data: profile });
+        setDetailLoading(false);
+      } else {
+        setMessages(prev => prev.slice(0, -1));
+        setMessages(prev => [...prev, {
+          text: `🕵️ ${currentLanguage === 'en' ? 'Full criminal profile for' : 'ಪೂರ್ಣ ಅಪರಾಧ ಪ್ರೊಫೈಲ್'} ${profile.name}:`,
+          isUser: false, intent: 'PERSON_PROFILE', personProfile: profile,
+        }]);
+      }
     } catch (e: any) {
-      setMessages(prev => prev.slice(0, -1));
+      setDetailLoading(false);
+      if (!wide) setMessages(prev => prev.slice(0, -1));
       if (e.message === 'UNAUTHORIZED') { handleSessionExpired(); return; }
-      setMessages(prev => [...prev, { text: 'Could not load the criminal profile.', isUser: false }]);
+      if (!wide) setMessages(prev => [...prev, { text: 'Could not load the criminal profile.', isUser: false }]);
     }
   };
 
@@ -1301,37 +1334,63 @@ const ChatPage: React.FC = () => {
     const esc = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    const rows = messages
-      .filter(m => !m.loading)
-      .map(m => {
-        const who = m.isUser ? (currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ') : 'KSP AI';
-        const side = m.isUser ? 'right' : 'left';
-        const bg = m.isUser ? '#e3f2fd' : '#f5f5f5';
+    // Reusable block builders for a full case / offender detail.
+    const crimeBlock = (d: CrimeDetail): string => {
+      const inv = d.investigation;
+      return `<div class="msg left"><div class="bubble" style="background:#fff8e1">
+        <div class="who">📁 ${currentLanguage === 'en' ? 'CASE DETAIL' : 'ಪ್ರಕರಣ ವಿವರ'} — ${esc(d.fir_number)}</div>
+        <div class="rec"><b>${esc(localizeCrimeType(d.crime_type, currentLanguage))}</b> — ${esc(localizeDistrict(d.district, currentLanguage))} · ${esc(d.police_station || '')} · ${esc(d.date_occurred)}</div>
+        ${inv ? `<div class="rec">Status: ${esc(inv.status || '—')} | Officer: ${esc(inv.officer || '—')} | IPC: ${esc(inv.ipc_sections || '—')} | Arrest: ${inv.arrest_made ? 'Yes' : 'No'} | Outcome: ${esc(inv.outcome || '—')}</div>` : ''}
+        ${d.description ? `<div class="rec desc">${esc(localizeDescription(d.description, currentLanguage))}</div>` : ''}
+        <div class="rec">🚩 Accused (${d.accused.length}): ${esc(d.accused.map(p => `${p.name}${p.age ? ', ' + p.age : ''}`).join('; ') || '—')}</div>
+        <div class="rec">🛡️ Victims (${d.victims.length}): ${esc(d.victims.map(p => p.name).join('; ') || '—')}</div>
+        ${d.witnesses.length ? `<div class="rec">👁️ Witnesses (${d.witnesses.length}): ${esc(d.witnesses.map(p => p.name).join('; '))}</div>` : ''}
+      </div></div>`;
+    };
+    const personBlock = (p: PersonProfile): string => {
+      const dm = p.demographics || {};
+      return `<div class="msg left"><div class="bubble" style="background:#fff8e1">
+        <div class="who">🕵️ ${currentLanguage === 'en' ? 'OFFENDER PROFILE' : 'ಅಪರಾಧಿ ವಿವರ'} — ${esc(p.name)}</div>
+        <div class="rec">Risk: <b>${p.risk_score ?? '—'}/100</b>${p.is_repeat_offender ? ' · REPEAT OFFENDER' : ''}</div>
+        <div class="rec">${[dm.age, dm.gender, dm.occupation, dm.education, dm.socio_economic_status, dm.district].filter(Boolean).map(x => esc(String(x))).join(' · ')}</div>
+        <div class="rec">🗂️ Cases (${p.accused_in_n_cases ?? (p.cases?.length || 0)}): ${esc((p.cases || []).slice(0, 12).map(c => `${c.fir_number} (${localizeCrimeType(c.crime_type, currentLanguage)})`).join('; ') || '—')}</div>
+        ${p.gangs && p.gangs.length ? `<div class="rec">🕸️ Gangs: ${esc(p.gangs.map(g => `${g.gang} (${g.role})`).join('; '))}</div>` : ''}
+      </div></div>`;
+    };
 
-        // Build extra detail text for rich messages
-        let extra = '';
-        if (m.results && m.results.length) {
-          extra += m.results.map((c, i) =>
-            `<div class="rec">${i + 1}. <b>${esc(localizeCrimeType(c.crime_type, currentLanguage))}</b> — ${esc(localizeDistrict(c.district, currentLanguage))} | FIR: ${esc(c.fir_number || '')} | ${esc(c.date_occurred || '')}<br/><span class="desc">${esc(localizeDescription(c.description, currentLanguage))}</span></div>`
-          ).join('');
-        }
-        if (m.breakdown && m.breakdown.length) {
-          extra += m.breakdown.map(b =>
-            `<div class="rec">${esc(localizeLabel(b.label, currentLanguage))}: <b>${b.count}</b></div>`
-          ).join('');
-        }
-        if (m.detail) {
-          const d = m.detail;
-          const inv = d.investigation;
-          extra += `<div class="rec"><b>${esc(d.fir_number)}</b> — ${esc(localizeCrimeType(d.crime_type, currentLanguage))}, ${esc(localizeDistrict(d.district, currentLanguage))}, ${esc(d.date_occurred)}`;
-          if (inv) extra += `<br/>Status: ${esc(inv.status || '—')} | Officer: ${esc(inv.officer || '—')} | IPC: ${esc(inv.ipc_sections || '—')}`;
-          extra += `<br/>Accused: ${esc(d.accused.map(p => p.name).join(', ') || '—')}`;
-          extra += `<br/>Victims: ${esc(d.victims.map(p => p.name).join(', ') || '—')}</div>`;
-        }
+    // Build the transcript as MANY SMALL blocks (one per message, one per chunk
+    // of ~10 result cards, one per detail) so page breaks land between blocks —
+    // no mid-line overlap, and no giant empty gaps.
+    const CHUNK = 10;
+    const blockList: string[] = [];
+    messages.filter(m => !m.loading).forEach(m => {
+      const who = m.isUser ? (currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ') : 'KSP AI';
+      const side = m.isUser ? 'right' : 'left';
+      const bg = m.isUser ? '#e3f2fd' : '#f5f5f5';
+      blockList.push(`<div class="msg ${side}"><div class="bubble" style="background:${bg}"><div class="who">${who}</div><div class="txt">${esc(m.text)}</div></div></div>`);
 
-        return `<div class="msg ${side}"><div class="bubble" style="background:${bg}"><div class="who">${who}</div><div class="txt">${esc(m.text)}</div>${extra}</div></div>`;
-      })
-      .join('');
+      if (m.results && m.results.length) {
+        for (let i = 0; i < m.results.length; i += CHUNK) {
+          const recs = m.results.slice(i, i + CHUNK).map((c, j) =>
+            `<div class="rec">${i + j + 1}. <b>${esc(localizeCrimeType(c.crime_type, currentLanguage))}</b> — ${esc(localizeDistrict(c.district, currentLanguage))} | FIR: ${esc(c.fir_number || '')} | ${esc(c.date_occurred || '')}<br/><span class="desc">${esc(localizeDescription(c.description, currentLanguage))}</span></div>`
+          ).join('');
+          blockList.push(`<div class="msg left"><div class="bubble" style="background:#fff">${recs}</div></div>`);
+        }
+      }
+      if (m.breakdown && m.breakdown.length) {
+        const bars = m.breakdown.map(b => `<div class="rec">${esc(localizeLabel(b.label, currentLanguage))}: <b>${b.count}</b></div>`).join('');
+        blockList.push(`<div class="msg left"><div class="bubble" style="background:#fff">${bars}</div></div>`);
+      }
+      if (m.detail) blockList.push(crimeBlock(m.detail));
+      if (m.personProfile) blockList.push(personBlock(m.personProfile));
+    });
+
+    // Include whatever is open in the right-hand detail panel (the drill-down).
+    if (detailPanel?.kind === 'crime') blockList.push(crimeBlock(detailPanel.data));
+    else if (detailPanel?.kind === 'person') blockList.push(personBlock(detailPanel.data));
+
+    const rows = blockList.join('');
+    const detailHtml = '';  // panel detail is now folded into blockList above
 
     const title = currentLanguage === 'en'
       ? 'KSP Crime AI — Conversation Transcript'
@@ -1360,29 +1419,51 @@ const ChatPage: React.FC = () => {
   <div class="sub">${currentLanguage === 'en' ? 'Government of Karnataka · Karnataka State Police' : 'ಕರ್ನಾಟಕ ಸರ್ಕಾರ · ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್'} · ${new Date().toLocaleString()}</div>
   <div class="sub">${currentLanguage === 'en' ? 'Officer' : 'ಅಧಿಕಾರಿ'}: ${esc(user?.name || '')}</div></div>
   ${rows}
+  ${detailHtml}
   <div class="ftr">${currentLanguage === 'en' ? 'Confidential — for authorized law enforcement use only.' : 'ಗೌಪ್ಯ — ಅಧಿಕೃತ ಕಾನೂನು ಜಾರಿ ಬಳಕೆಗೆ ಮಾತ್ರ.'}</div>
 </div>`;
     document.body.appendChild(container);
 
     try {
       const target = container.querySelector('.ksp-pdf') as HTMLElement;
-      const canvas = await html2canvas(target, { scale: 2, backgroundColor: '#ffffff' });
-      const imgData = canvas.toDataURL('image/png');
-
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pageW = 210, pageH = 297;
-      const imgW = pageW;
-      const imgH = (canvas.height * imgW) / canvas.width;
-      let heightLeft = imgH;
-      let position = 0;
+      const pageW = 210, pageH = 297, margin = 8;
+      const usableW = pageW - margin * 2;
+      const maxBlockMm = pageH - margin * 2;
+      let cursorY = margin;
 
-      pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position -= pageH;
-        pdf.addPage();
-        pdf.addImage(imgData, 'PNG', 0, position, imgW, imgH);
-        heightLeft -= pageH;
+      // Render each top-level block (header, each message, detail, footer) to
+      // its own image and flow it onto pages. A block is never split unless it
+      // is taller than a full page — which prevents the mid-line overlap that
+      // slicing one giant image caused.
+      const addCanvasPaged = (canvas: HTMLCanvasElement) => {
+        const imgH = (canvas.height * usableW) / canvas.width;
+        if (imgH <= maxBlockMm) {
+          if (cursorY + imgH > pageH - margin) { pdf.addPage(); cursorY = margin; }
+          pdf.addImage(canvas.toDataURL('image/png'), 'PNG', margin, cursorY, usableW, imgH);
+          cursorY += imgH + 3;
+          return;
+        }
+        // Oversized block (e.g. many result cards): slice vertically across pages.
+        const pxPerPage = (maxBlockMm * canvas.width) / usableW;
+        let sy = 0;
+        while (sy < canvas.height) {
+          const sliceH = Math.min(pxPerPage, canvas.height - sy);
+          const slice = document.createElement('canvas');
+          slice.width = canvas.width; slice.height = sliceH;
+          slice.getContext('2d')!.drawImage(canvas, 0, sy, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+          const sliceMm = (sliceH * usableW) / canvas.width;
+          if (cursorY + sliceMm > pageH - margin) { pdf.addPage(); cursorY = margin; }
+          pdf.addImage(slice.toDataURL('image/png'), 'PNG', margin, cursorY, usableW, sliceMm);
+          cursorY += sliceMm + 2;
+          sy += sliceH;
+        }
+      };
+
+      const blocks = Array.from(target.children) as HTMLElement[];
+      for (const block of blocks) {
+        const c = await html2canvas(block, { scale: 2, backgroundColor: '#ffffff' });
+        addCanvasPaged(c);
       }
 
       const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
@@ -1527,69 +1608,97 @@ const ChatPage: React.FC = () => {
 
       {/* Main chat area - NO SIDEBAR */}
       {currentView === 'chat' && (
-      <div style={{ 
-        flex: 1, 
-        display: 'flex',
-        flexDirection: 'column',
-        backgroundColor: '#ffffff',
-        overflow: 'hidden'
-      }}>
-        {/* Chat messages */}
-        <div style={{ 
-          flex: 1, 
-          overflowY: 'auto', 
-          overflowX: 'hidden',
-          padding: '30px 50px',
-          backgroundColor: '#fafafa'
-        }}>
-          {messages.map((message, index) => (
-            <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} onPersonClick={showPersonDetail} />
-          ))}
-          <div ref={messagesEndRef} />
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'row', backgroundColor: '#ffffff', overflow: 'hidden' }}>
+        {/* LEFT: conversation + input */}
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Chat messages */}
+          <div style={{
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: '30px 50px',
+            backgroundColor: '#fafafa'
+          }}>
+            {messages.map((message, index) => (
+              <MessageBubble key={index} message={message} language={currentLanguage} onCrimeClick={showFirDetail} onPersonClick={showPersonDetail} />
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input area */}
+          <div style={{
+            borderTop: '2px solid #e0e0e0',
+            backgroundColor: '#ffffff',
+            padding: '20px 50px',
+            boxShadow: '0 -2px 10px rgba(0,0,0,0.05)'
+          }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '12px' }}>
+              <VoiceButton onVoiceResult={handleVoiceResult} disabled={isLoading} language={currentLanguage} />
+              <InputField
+                onSubmit={handleSubmit}
+                placeholder={currentLanguage === 'en'
+                  ? "Type your query here... (e.g., Show crimes in Bengaluru)"
+                  : "ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಇಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ..."}
+                disabled={isLoading}
+              />
+              <button
+                onClick={exportConversationPDF}
+                title={currentLanguage === 'en' ? 'Export conversation as PDF' : 'ಸಂಭಾಷಣೆಯನ್ನು PDF ಆಗಿ ರಫ್ತು ಮಾಡಿ'}
+                style={{
+                  backgroundColor: '#ff9800', color: 'white', border: 'none',
+                  borderRadius: '6px', padding: '14px 18px', cursor: 'pointer',
+                  fontSize: '15px', fontWeight: 600, whiteSpace: 'nowrap',
+                  boxShadow: '0 2px 4px rgba(255,152,0,0.3)'
+                }}
+              >
+                📄 PDF
+              </button>
+            </div>
+          </div>
         </div>
 
-        {/* Input area */}
-        <div style={{ 
-          borderTop: '2px solid #e0e0e0', 
-          backgroundColor: '#ffffff',
-          padding: '20px 50px',
-          boxShadow: '0 -2px 10px rgba(0,0,0,0.05)'
+        {/* RIGHT: case / person detail panel (wide screens) */}
+        <div style={{
+          width: 440, flexShrink: 0, borderLeft: '1px solid #e0e0e0',
+          backgroundColor: '#f7f8fc', overflowY: 'auto',
+          display: window.innerWidth < 900 ? 'none' : 'flex', flexDirection: 'column',
         }}>
-          <div style={{ 
-            display: 'flex', 
-            gap: '12px', 
-            alignItems: 'center',
-            marginBottom: '12px'
-          }}>
-            <VoiceButton onVoiceResult={handleVoiceResult} disabled={isLoading} language={currentLanguage} />
-            <InputField
-              onSubmit={handleSubmit}
-              placeholder={currentLanguage === 'en' 
-                ? "Type your query here... (e.g., Show crimes in Bengaluru)" 
-                : "ನಿಮ್ಮ ಪ್ರಶ್ನೆಯನ್ನು ಇಲ್ಲಿ ಟೈಪ್ ಮಾಡಿ..."}
-              disabled={isLoading}
-            />
-            <button
-              onClick={exportConversationPDF}
-              title={currentLanguage === 'en' ? 'Export conversation as PDF' : 'ಸಂಭಾಷಣೆಯನ್ನು PDF ಆಗಿ ರಫ್ತು ಮಾಡಿ'}
-              style={{
-                backgroundColor: '#ff9800', color: 'white', border: 'none',
-                borderRadius: '6px', padding: '14px 18px', cursor: 'pointer',
-                fontSize: '15px', fontWeight: 600, whiteSpace: 'nowrap',
-                boxShadow: '0 2px 4px rgba(255,152,0,0.3)'
-              }}
-            >
-              📄 PDF
-            </button>
-          </div>
           <div style={{
-            fontSize: '12px',
-            color: '#999',
-            textAlign: 'center'
+            padding: '14px 18px', borderBottom: '1px solid #e6e9f0', background: '#fff',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
-            {currentLanguage === 'en'
-              ? '💡 Tip: Include location and/or date range for better results | 🔒 All queries are secure and logged'
-              : '💡 ಸಲಹೆ: ಉತ್ತಮ ಫಲಿತಾಂಶಗಳಿಗಾಗಿ ಸ್ಥಳ ಮತ್ತು/ಅಥವಾ ದಿನಾಂಕ ಶ್ರೇಣಿಯನ್ನು ಸೇರಿಸಿ | 🔒 ಎಲ್ಲಾ ಪ್ರಶ್ನೆಗಳು ಸುರಕ್ಷಿತ ಮತ್ತು ಲಾಗ್ ಮಾಡಲಾಗಿದೆ'}
+            <span style={{ fontWeight: 700, color: '#1a237e', fontSize: 14 }}>
+              🗂️ {currentLanguage === 'en' ? 'Case / Person Detail' : 'ಪ್ರಕರಣ / ವ್ಯಕ್ತಿ ವಿವರ'}
+            </span>
+            {(detailPanel || detailLoading) && (
+              <button onClick={() => { setDetailPanel(null); setDetailLoading(false); }}
+                title={currentLanguage === 'en' ? 'Close' : 'ಮುಚ್ಚಿ'}
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 16, color: '#90a4ae' }}>✕</button>
+            )}
+          </div>
+
+          <div style={{ padding: '16px 18px', flex: 1 }}>
+            {detailLoading ? (
+              <div style={{ padding: '60px 10px', textAlign: 'center', color: '#90a4ae' }}>
+                ⏳ {currentLanguage === 'en' ? 'Loading details…' : 'ವಿವರ ಲೋಡ್ ಆಗುತ್ತಿದೆ…'}
+              </div>
+            ) : detailPanel?.kind === 'crime' ? (
+              <CrimeDetailCard detail={detailPanel.data} language={currentLanguage} onPersonClick={showPersonDetail} />
+            ) : detailPanel?.kind === 'person' ? (
+              <PersonProfileCard p={detailPanel.data} language={currentLanguage} />
+            ) : (
+              <div style={{ padding: '50px 14px', textAlign: 'center', color: '#9aa2b5' }}>
+                <div style={{ fontSize: 38, marginBottom: 10 }}>🗂️</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: '#556' }}>
+                  {currentLanguage === 'en' ? 'Click a case or an accused' : 'ಪ್ರಕರಣ ಅಥವಾ ಆರೋಪಿಯನ್ನು ಕ್ಲಿಕ್ ಮಾಡಿ'}
+                </div>
+                <div style={{ fontSize: 12.5, marginTop: 4 }}>
+                  {currentLanguage === 'en'
+                    ? 'Full case dossier and offender profiles open here.'
+                    : 'ಪೂರ್ಣ ಪ್ರಕರಣ ವಿವರ ಇಲ್ಲಿ ತೆರೆಯುತ್ತದೆ.'}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -1610,17 +1719,22 @@ const ChatPage: React.FC = () => {
       }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600 }}>
           <span style={{
-            width: '22px', height: '22px', borderRadius: '50%', background: '#ffb300',
+            width: '22px', height: '22px', borderRadius: '50%', background: '#ffffff',
             color: '#1a237e', display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '10px', fontWeight: 800
-          }}>KSP</span>
+            fontSize: '9px', fontWeight: 800, overflow: 'hidden'
+          }}>
+            <img src={KARNATAKA_EMBLEM_URL} alt="Emblem of Karnataka"
+              style={{ width: '90%', height: '90%', objectFit: 'contain' }}
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+                const s = e.currentTarget.nextElementSibling as HTMLElement | null;
+                if (s) s.style.display = 'inline';
+              }} />
+            <span style={{ display: 'none' }}>KSP</span>
+          </span>
           {currentLanguage === 'en' ? 'Karnataka State Police' : 'ಕರ್ನಾಟಕ ರಾಜ್ಯ ಪೊಲೀಸ್'}
         </span>
-        <span style={{ color: 'rgba(255,255,255,0.75)' }}>
-          {currentLanguage === 'en'
-            ? '© 2024 Government of Karnataka · All Rights Reserved'
-            : '© 2024 ಕರ್ನಾಟಕ ಸರ್ಕಾರ · ಎಲ್ಲಾ ಹಕ್ಕುಗಳನ್ನು ಕಾಯ್ದಿರಿಸಲಾಗಿದೆ'}
-        </span>
+
         <span style={{ color: 'rgba(255,255,255,0.65)', display: 'flex', alignItems: 'center', gap: '6px' }}>
           🔒 {currentLanguage === 'en' ? 'Confidential · Authorized use only' : 'ಗೌಪ್ಯ · ಅಧಿಕೃತ ಬಳಕೆ ಮಾತ್ರ'}
         </span>
