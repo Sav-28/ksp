@@ -11,11 +11,18 @@ interface Seasonal {
   peak_month: { month: string; count: number } | null;
   festival_window: { months: string; avg_per_month: number; baseline_avg_per_month: number; uplift_pct: number };
 }
+interface Anomaly {
+  scope: string; name: string; month: string; count: number;
+  baseline_mean: number; std_dev: number; z_score: number;
+  direction: string; severity: string; message: string; current: boolean;
+}
+interface AnomalyData { anomalies: Anomaly[]; total: number; current_count: number; method: string; }
 
 const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
   const [data, setData] = useState<ForecastData | null>(null);
   const [seasonal, setSeasonal] = useState<Seasonal | null>(null);
+  const [anomalies, setAnomalies] = useState<AnomalyData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,6 +35,10 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
         const sres = await apiFetch('/api/trends/seasonal');
         setSeasonal(await sres.json());
       } catch { /* seasonal is optional */ }
+      try {
+        const ares = await apiFetch('/api/anomalies');
+        setAnomalies(await ares.json());
+      } catch { /* anomalies optional */ }
     } catch (e: any) {
       setError(e.message === 'UNAUTHORIZED' ? 'Session expired. Please log in again.' : 'Unable to load forecast.');
     } finally { setLoading(false); }
@@ -74,6 +85,13 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
           <div style={{ fontSize: 12, color: '#666' }}>{t('Active early-warning alerts', 'ಸಕ್ರಿಯ ಮುನ್ನೆಚ್ಚರಿಕೆಗಳು')}</div>
           <div style={{ fontSize: 30, fontWeight: 800, color: '#e53935' }}>{data.alert_count}</div>
         </div>
+        {anomalies && (
+          <div style={{ ...card, flex: '1 1 200px', borderTop: '4px solid #6a1b9a' }}>
+            <div style={{ fontSize: 12, color: '#666' }}>{t('Statistical anomalies (current)', 'ಅಂಕಿಅಂಶ ವೈಪರೀತ್ಯ (ಪ್ರಸ್ತುತ)')}</div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: '#6a1b9a' }}>{anomalies.current_count}</div>
+            <div style={{ fontSize: 11, color: '#999' }}>{anomalies.total} {t('total detected', 'ಒಟ್ಟು ಪತ್ತೆಯಾಗಿದೆ')}</div>
+          </div>
+        )}
       </div>
 
       <div style={{ ...card, marginBottom: 20 }}>
@@ -126,6 +144,36 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
               </strong> {t('vs baseline', 'ಸಾಮಾನ್ಯಕ್ಕೆ ಹೋಲಿಸಿ')}
             </span>
           </div>
+        </div>
+      )}
+
+      {/* Statistical anomaly detection (Statement 2) */}
+      {anomalies && anomalies.anomalies.length > 0 && (
+        <div style={{ ...card, marginBottom: 20 }}>
+          <div style={cardTitle}>📊 {t('Anomaly Detection', 'ವೈಪರೀತ್ಯ ಪತ್ತೆ')}</div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: -8, marginBottom: 12 }}>
+            {t('Months that deviate sharply from a district/crime-type\'s own historical norm.', 'ತಮ್ಮದೇ ಚಾರಿತ್ರಿಕ ಸರಾಸರಿಯಿಂದ ತೀವ್ರವಾಗಿ ವಿಚಲಿಸುವ ತಿಂಗಳುಗಳು.')}
+            {' '}<span style={{ fontStyle: 'italic' }}>({anomalies.method})</span>
+          </div>
+          {anomalies.anomalies.map((a, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '10px', borderRadius: 6, marginBottom: 6,
+              background: a.severity === 'High' ? '#f3e5f5' : '#faf4fb',
+              border: a.current ? '1px solid #ce93d8' : '1px solid #f0f0f0',
+            }}>
+              <span style={{ fontSize: 18 }}>{a.direction === 'spike' ? '📈' : '📉'}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>
+                  {a.scope === 'district' ? '📍' : '🏷️'} {a.name}
+                  {a.current && <span style={{ marginLeft: 8, fontSize: 10, background: '#6a1b9a', color: '#fff', padding: '2px 7px', borderRadius: 10 }}>{t('CURRENT', 'ಪ್ರಸ್ತುತ')}</span>}
+                </div>
+                <div style={{ fontSize: 12, color: '#666' }}>
+                  {a.month}: {a.count} {t('vs', 'vs')} {a.baseline_mean}/{t('mo', 'ತಿಂ')} · {Math.abs(a.z_score)}σ {a.direction === 'spike' ? t('above', 'ಮೇಲೆ') : t('below', 'ಕೆಳಗೆ')}
+                </div>
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 700, color: a.severity === 'High' ? '#6a1b9a' : '#9c27b0' }}>{a.severity}</span>
+            </div>
+          ))}
         </div>
       )}
 

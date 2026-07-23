@@ -40,6 +40,11 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
   const [search, setSearch] = useState('');
   const [briefing, setBriefing] = useState<{ text: string; engine: string } | null>(null);
   const [briefingLoading, setBriefingLoading] = useState(false);
+  const [model, setModel] = useState<{ available: boolean; metrics: any } | null>(null);
+
+  useEffect(() => {
+    apiFetch('/api/model/metrics').then(r => r.json()).then(setModel).catch(() => {});
+  }, []);
 
   const load = async (searchTerm = '') => {
     setLoading(true); setError(null);
@@ -94,10 +99,24 @@ const ProfilesView = ({ language }: { language: 'en' | 'kn' }) => {
       <h2 style={{ color: '#1a237e', fontSize: 24, marginBottom: 6 }}>
         🎯 {t('Offender Profiling & Risk Scoring', 'ಅಪರಾಧಿ ವಿಶ್ಲೇಷಣೆ ಮತ್ತು ಅಪಾಯ ಸ್ಕೋರ್')}
       </h2>
-      <p style={{ color: '#666', fontSize: 14, marginBottom: 20 }}>
+      <p style={{ color: '#666', fontSize: 14, marginBottom: 12 }}>
         {t('Search any criminal by name, or browse repeat offenders ranked by risk',
            'ಹೆಸರಿನಿಂದ ಯಾವುದೇ ಅಪರಾಧಿಯನ್ನು ಹುಡುಕಿ, ಅಥವಾ ಅಪಾಯದ ಪ್ರಕಾರ ಬ್ರೌಸ್ ಮಾಡಿ')}
       </p>
+
+      {/* Trained-model provenance badge — shows the risk score is ML, with a metric */}
+      {model?.available && model.metrics && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 8,
+          padding: '8px 14px', marginBottom: 20, fontSize: 13, color: '#1b5e20',
+        }}>
+          <span style={{ fontWeight: 700 }}>🤖 {t('Risk scores by trained ML model', 'ತರಬೇತಿ ಪಡೆದ ML ಮಾದರಿ')}</span>
+          <span>ROC-AUC <strong>{model.metrics.roc_auc}</strong></span>
+          <span>{t('Accuracy', 'ನಿಖರತೆ')} <strong>{model.metrics.accuracy}</strong></span>
+          <span style={{ color: '#558b2f' }}>· {model.metrics.model} · n={model.metrics.n_samples} ({t('synthetic', 'ಕೃತಕ')})</span>
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {/* List */}

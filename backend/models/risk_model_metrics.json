@@ -1,0 +1,60 @@
+{
+  "model": "RandomForestClassifier",
+  "target": "repeat offender (accused in 2+ cases)",
+  "features": [
+    "age",
+    "is_male",
+    "ses_rank",
+    "edu_rank",
+    "gang_member",
+    "avg_severity",
+    "max_severity",
+    "urban",
+    "recent_activity"
+  ],
+  "n_samples": 692,
+  "test_size": 139,
+  "repeat_rate": 0.438,
+  "roc_auc": 0.975,
+  "accuracy": 0.921,
+  "feature_importances": [
+    {
+      "feature": "avg_severity",
+      "importance": 0.3999
+    },
+    {
+      "feature": "max_severity",
+      "importance": 0.3106
+    },
+    {
+      "feature": "recent_activity",
+      "importance": 0.1104
+    },
+    {
+      "feature": "age",
+      "importance": 0.0664
+    },
+    {
+      "feature": "edu_rank",
+      "importance": 0.039
+    },
+    {
+      "feature": "ses_rank",
+      "importance": 0.0316
+    },
+    {
+      "feature": "gang_member",
+      "importance": 0.0209
+    },
+    {
+      "feature": "urban",
+      "importance": 0.0109
+    },
+    {
+      "feature": "is_male",
+      "importance": 0.0103
+    }
+  ],
+  "trained_on": "synthetic seeded dataset",
+  "trained_at": "2026-07-24"
+}
