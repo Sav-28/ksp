@@ -35,6 +35,7 @@ from src.api.routes.decision_support import router as decision_router
 from src.api.routes.briefing import router as briefing_router
 from src.api.routes.casework import router as casework_router
 from src.api.routes.crimes import router as crimes_router
+from src.api.routes.anomaly import router as anomaly_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -117,6 +118,19 @@ def on_startup():
         except Exception as e:
             logging.warning(f"FIR-schema projection skipped/failed: {e}")
 
+        # Train the offender-risk model if scikit-learn is available and the
+        # model file isn't already present. Gracefully skipped on slim builds
+        # (the API then falls back to the deterministic heuristic score).
+        try:
+            import os as _os
+            from src.ml.risk_model import _MODEL_PATH
+            if not _os.path.isfile(_MODEL_PATH):
+                logging.info("Training offender-risk model...")
+                import train_risk_model
+                train_risk_model.main()
+        except Exception as e:
+            logging.warning(f"Risk-model training skipped: {e}")
+
     # Pre-load the Ollama model in the background so the first query is fast.
     if os.getenv("KSP_NLP_PROVIDER", "ollama").lower() == "ollama":
         import threading
@@ -144,6 +158,7 @@ app.include_router(decision_router, prefix="/api")
 app.include_router(briefing_router, prefix="/api")
 app.include_router(casework_router, prefix="/api")
 app.include_router(crimes_router, prefix="/api")
+app.include_router(anomaly_router, prefix="/api")
 
 
 @app.get("/health")

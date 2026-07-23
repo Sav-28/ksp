@@ -72,6 +72,12 @@ CRIME_TYPES = [
 ]
 IPC_BY_TYPE = {name: sec for sec, name in CRIME_TYPES}
 
+# Realistic crime-type mix (calibrated to NCRB-style proportions — property
+# crime dominates, murder is rare). Aligned to CRIME_TYPES order:
+# Theft, Murder, Snatching, Robbery, Assault, Burglary, Rioting, Cheating,
+# Forgery, Counterfeiting.
+CRIME_TYPE_WEIGHTS = [30, 4, 8, 7, 12, 12, 6, 11, 6, 4]
+
 CRIME_DESCRIPTIONS = {
     "Theft": ["Mobile phone theft from public bus", "Laptop theft from parked vehicle",
               "Bike theft from parking lot", "Jewelry theft from residence",
@@ -249,8 +255,11 @@ def generate_background(db, persons, n=820):
 
     # Demographic skew per crime type (so sociological insights are meaningful)
     # Map crime type -> preferred SES / age band for accused
+    crime_names = [c[1] for c in CRIME_TYPES]
     for i in range(n):
-        ctype = random.choice([c[1] for c in CRIME_TYPES])
+        # Realistic crime-type mix (property crime common, murder rare) and
+        # population-weighted districts — so analytics look credible.
+        ctype = random.choices(crime_names, weights=CRIME_TYPE_WEIGHTS)[0]
         district = random.choices(DISTRICTS, weights=[22, 8, 13, 11, 10, 11, 12, 7, 9, 9])[0]
         when = weighted_past_date()
         crime = add_crime(db, ctype, district, when)

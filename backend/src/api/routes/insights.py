@@ -17,8 +17,17 @@ from datetime import date
 from src.database.session import get_db
 from src.database.models import Person, CasePerson, Crime, GangMember, Gang
 from src.api.auth import get_current_user
+from src.ml import risk_model
+from src.ml.features import make_vector, URBAN_DISTRICTS as ML_URBAN
 
 router = APIRouter()
+
+
+@router.get("/model/metrics")
+async def model_metrics(username: str = Depends(get_current_user)) -> Dict[str, Any]:
+    """Expose the trained risk model's evaluation metrics (or availability=false)."""
+    m = risk_model.get_metrics()
+    return {"available": risk_model.is_available(), "metrics": m}
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +265,31 @@ async def list_offenders(
     repeat_ids = target_ids
 
     current_year = date.today().year
+
+    # Build a feature vector per offender (same definition as training).
+    valid = [(pid, persons[pid], agg[pid]) for pid in repeat_ids if pid in persons]
+    vectors = []
+    for pid, p, a in valid:
+        sev = [SEVERITY.get(t, 3) for t in a["types"]] or [3]
+        vectors.append(make_vector(
+            p.age, p.gender, p.socio_economic_status, p.education_level,
+            pid in gang_ids, sum(sev) / len(sev), max(sev),
+            p.district in ML_URBAN, a["latest_year"] >= (current_year - 1),
+        ))
+
+    # Prefer the trained model's probability; fall back to the heuristic.
+    model_scores = risk_model.score_batch(vectors)
+    scored_by = "model" if model_scores is not None else "heuristic"
+
     offenders = []
-    for pid in repeat_ids:
-        p = persons.get(pid)
-        if not p:
-            continue
-        a = agg[pid]
+    for i, (pid, p, a) in enumerate(valid):
         is_gang = pid in gang_ids
-        recency_bonus = 10 if a["latest_year"] >= (current_year - 1) else 0
-        raw = (a["count"] * 8) + (a["severity"] * 1.5) + (20 if is_gang else 0) + recency_bonus
-        score = round(min(raw, 100.0), 1)
+        if model_scores is not None:
+            score = model_scores[i]
+        else:
+            recency_bonus = 10 if a["latest_year"] >= (current_year - 1) else 0
+            raw = (a["count"] * 8) + (a["severity"] * 1.5) + (20 if is_gang else 0) + recency_bonus
+            score = round(min(raw, 100.0), 1)
         p.risk_score = score
         offenders.append({
             "person_id": p.id, "name": p.full_name, "age": p.age, "gender": p.gender,
@@ -275,7 +299,11 @@ async def list_offenders(
     db.commit()
 
     offenders.sort(key=lambda x: x["risk_score"], reverse=True)
-    return {"total_repeat_offenders": len(offenders), "offenders": offenders[:limit]}
+    return {
+        "total_repeat_offenders": len(offenders),
+        "offenders": offenders[:limit],
+        "scored_by": scored_by,
+    }
 
 
 @router.get("/offenders/{person_id}")
@@ -290,8 +318,6 @@ async def offender_profile(
         raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
 
     risk = compute_risk(db, person_id)
-    p.risk_score = risk["risk_score"]
-    db.commit()
 
     # Case history
     links = db.query(CasePerson).filter(
@@ -319,7 +345,21 @@ async def offender_profile(
     # Behavioural summary
     mo = Counter(crime_types)
     primary_mo = mo.most_common(1)[0][0] if mo else None
-    risk_level = "High" if risk["risk_score"] >= 70 else "Medium" if risk["risk_score"] >= 40 else "Low"
+
+    # Trained-model score (preferred); heuristic factors kept for explainability.
+    sevs = [SEVERITY.get(ct, 3) for ct in crime_types] or [3]
+    vec = make_vector(
+        p.age, p.gender, p.socio_economic_status, p.education_level,
+        risk["factors"]["gang_member"], sum(sevs) / len(sevs), max(sevs),
+        p.district in ML_URBAN, risk["factors"]["recent_activity"],
+    )
+    ms = risk_model.score_batch([vec])
+    final_score = ms[0] if ms is not None else risk["risk_score"]
+    scored_by = "model" if ms is not None else "heuristic"
+    p.risk_score = final_score
+    db.commit()
+
+    risk_level = "High" if final_score >= 70 else "Medium" if final_score >= 40 else "Low"
 
     return {
         "person_id": p.id,
@@ -330,8 +370,9 @@ async def offender_profile(
             "education": p.education_level, "socio_economic_status": p.socio_economic_status,
             "district": p.district,
         },
-        "risk_score": risk["risk_score"],
+        "risk_score": final_score,
         "risk_level": risk_level,
+        "scored_by": scored_by,
         "risk_factors": risk["factors"],
         "primary_modus_operandi": primary_mo,
         "crime_type_distribution": [{"label": k, "count": v} for k, v in mo.most_common()],
