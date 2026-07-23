@@ -34,6 +34,7 @@ from src.api.routes.insights import router as insights_router
 from src.api.routes.decision_support import router as decision_router
 from src.api.routes.briefing import router as briefing_router
 from src.api.routes.casework import router as casework_router
+from src.api.routes.crimes import router as crimes_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -142,6 +143,7 @@ app.include_router(insights_router, prefix="/api")
 app.include_router(decision_router, prefix="/api")
 app.include_router(briefing_router, prefix="/api")
 app.include_router(casework_router, prefix="/api")
+app.include_router(crimes_router, prefix="/api")
 
 
 @app.get("/health")
@@ -173,7 +175,11 @@ if os.path.isdir(_STATIC) and os.path.isfile(os.path.join(_STATIC, "index.html")
 
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        """Serve a real file if it exists, else index.html (client-side routing)."""
+        """Serve a real file if it exists, else index.html (client-side routing).
+        Unknown /api/* paths must NOT fall back to index.html — return a JSON 404
+        so the client gets a clear error (and never caches HTML for an API URL)."""
+        if full_path.startswith("api/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
         candidate = os.path.join(_STATIC, full_path)
         if full_path and os.path.isfile(candidate):
             return FileResponse(candidate)

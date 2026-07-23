@@ -17,6 +17,9 @@ export interface AuthUser {
   username: string;
   name: string;
   role: string;
+  can_register?: boolean;
+  can_update_case?: boolean;
+  can_close_case?: boolean;
 }
 
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
@@ -52,7 +55,12 @@ export const login = async (username: string, password: string): Promise<AuthUse
   }
 
   const data = await res.json();
-  const user: AuthUser = { username: data.username, name: data.name, role: data.role };
+  const user: AuthUser = {
+    username: data.username, name: data.name, role: data.role,
+    can_register: data.can_register,
+    can_update_case: data.can_update_case,
+    can_close_case: data.can_close_case,
+  };
   setAuth(data.token, user);
   return user;
 };
@@ -70,7 +78,10 @@ export const apiFetch = async (path: string, options: RequestInit = {}): Promise
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  // Never let the browser serve a cached response for API calls. Without this,
+  // a stale 200 (e.g. the SPA index.html returned by the server fallback before
+  // a route existed) can get cached and replayed, breaking JSON parsing.
+  const res = await fetch(`${API_BASE}${path}`, { ...options, headers, cache: 'no-store' });
 
   if (res.status === 401) {
     clearAuth();

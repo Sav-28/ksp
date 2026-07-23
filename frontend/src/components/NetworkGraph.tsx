@@ -18,31 +18,25 @@ export interface GraphEdge {
   cases?: string[];   // the Crime No(s) that link the two people (co-accused)
 }
 
-interface Pos { x: number; y: number; }
+interface Pos { x: number; y: number; ring: number; angle: number; }
 
-const GROUP_COLOR: Record<string, string> = {
+const NODE_FILL = {
   root: '#d32f2f',
-  leader: '#ff9800',
-  person: '#1a237e',
-};
-
-const EDGE_COLOR: Record<string, string> = {
-  'co-accused': '#c62828',
-  co_accused: '#c62828',
-  gang_member: '#ff9800',
-  family: '#66bb6a',
-  financial: '#ab47bc',
+  leader: '#fb8c00',
+  person: '#3949ab',
 };
 
 /**
- * Self-contained force-directed graph rendered as SVG.
- * Runs a lightweight Fruchterman-Reingold layout once (memoized).
+ * Clean radial ("hub-and-spoke") network graph.
+ * The focus person sits at the centre; direct connections form an inner ring;
+ * second-degree connections sit on an outer ring near the neighbour that links
+ * them. Far easier to read than a force-directed tangle.
  */
 const NetworkGraph = ({
   nodes,
   edges,
-  width = 720,
-  height = 460,
+  width = 760,
+  height = 520,
   onNodeClick,
   language = 'en',
 }: {
@@ -55,137 +49,202 @@ const NetworkGraph = ({
 }) => {
   const [hover, setHover] = useState<string | null>(null);
 
-  const positions = useMemo(() => {
-    const n = nodes.length;
-    if (n === 0) return {} as Record<string, Pos>;
-
-    const area = width * height;
-    const k = Math.sqrt(area / n) * 0.7; // ideal edge length
+  const { positions, root, rootDegree } = useMemo(() => {
     const pos: Record<string, Pos> = {};
+    if (nodes.length === 0) return { positions: pos, root: null as string | null, rootDegree: 0 };
 
-    // Deterministic initial placement on a circle (stable layout)
-    nodes.forEach((node, i) => {
-      const angle = (2 * Math.PI * i) / n;
-      pos[node.id] = {
-        x: width / 2 + Math.cos(angle) * (width / 4),
-        y: height / 2 + Math.sin(angle) * (height / 4),
-      };
+    const cx = width / 2;
+    const cy = height / 2;
+    const R1 = Math.min(width, height) * 0.27;   // inner ring radius
+    const R2 = Math.min(width, height) * 0.44;   // outer ring radius
+
+    // Adjacency (undirected)
+    const adj = new Map<string, Set<string>>();
+    nodes.forEach((n) => adj.set(n.id, new Set()));
+    edges.forEach((e) => {
+      if (adj.has(e.source) && adj.has(e.target)) {
+        adj.get(e.source)!.add(e.target);
+        adj.get(e.target)!.add(e.source);
+      }
     });
 
-    const idIndex = new Map(nodes.map((nd, i) => [nd.id, i]));
-    const validEdges = edges.filter(e => idIndex.has(e.source) && idIndex.has(e.target));
-
-    const iterations = 300;
-    let temp = width / 10;
-    const cool = temp / (iterations + 1);
-
-    for (let it = 0; it < iterations; it++) {
-      const disp: Record<string, Pos> = {};
-      nodes.forEach(nd => (disp[nd.id] = { x: 0, y: 0 }));
-
-      // Repulsive forces (all pairs)
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          const a = nodes[i], b = nodes[j];
-          let dx = pos[a.id].x - pos[b.id].x;
-          let dy = pos[a.id].y - pos[b.id].y;
-          let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-          const rep = (k * k) / dist;
-          const ux = dx / dist, uy = dy / dist;
-          disp[a.id].x += ux * rep; disp[a.id].y += uy * rep;
-          disp[b.id].x -= ux * rep; disp[b.id].y -= uy * rep;
-        }
-      }
-
-      // Attractive forces (along edges)
-      validEdges.forEach(e => {
-        let dx = pos[e.source].x - pos[e.target].x;
-        let dy = pos[e.source].y - pos[e.target].y;
-        let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const att = (dist * dist) / k;
-        const ux = dx / dist, uy = dy / dist;
-        disp[e.source].x -= ux * att; disp[e.source].y -= uy * att;
-        disp[e.target].x += ux * att; disp[e.target].y += uy * att;
-      });
-
-      // Apply with temperature limit
-      for (let idx = 0; idx < n; idx++) {
-        const nd = nodes[idx];
-        const d = disp[nd.id];
-        const len = Math.sqrt(d.x * d.x + d.y * d.y) || 0.01;
-        pos[nd.id].x += (d.x / len) * Math.min(len, temp);
-        pos[nd.id].y += (d.y / len) * Math.min(len, temp);
-        // Keep within bounds
-        pos[nd.id].x = Math.max(30, Math.min(width - 30, pos[nd.id].x));
-        pos[nd.id].y = Math.max(30, Math.min(height - 30, pos[nd.id].y));
-      }
-
-      temp -= cool;
+    // Root = explicit 'root' node, else the highest-degree node.
+    let rootId = nodes.find((n) => n.group === 'root')?.id;
+    if (!rootId) {
+      rootId = nodes.reduce((best, n) =>
+        (adj.get(n.id)!.size > (adj.get(best)?.size ?? -1) ? n.id : best), nodes[0].id);
     }
 
-    return pos;
+    // BFS depth + parent from root
+    const depth = new Map<string, number>();
+    const parent = new Map<string, string>();
+    depth.set(rootId, 0);
+    const queue = [rootId];
+    while (queue.length) {
+      const cur = queue.shift()!;
+      Array.from(adj.get(cur)!).forEach((nb) => {
+        if (!depth.has(nb)) {
+          depth.set(nb, depth.get(cur)! + 1);
+          parent.set(nb, cur);
+          queue.push(nb);
+        }
+      });
+    }
+
+    const ring1 = nodes.filter((n) => depth.get(n.id) === 1);
+    const ring2plus = nodes.filter((n) => (depth.get(n.id) ?? 99) >= 2);
+    // Disconnected (no path to root) — treat as outer ring too.
+    const orphans = nodes.filter((n) => n.id !== rootId && !depth.has(n.id));
+
+    // Root at centre
+    pos[rootId] = { x: cx, y: cy, ring: 0, angle: 0 };
+
+    // Inner ring: direct connections evenly spaced
+    const angleOf: Record<string, number> = {};
+    ring1.forEach((n, i) => {
+      const a = (2 * Math.PI * i) / Math.max(ring1.length, 1) - Math.PI / 2;
+      angleOf[n.id] = a;
+      pos[n.id] = { x: cx + Math.cos(a) * R1, y: cy + Math.sin(a) * R1, ring: 1, angle: a };
+    });
+
+    // Outer ring: group second-degree nodes under their inner-ring parent and
+    // fan them out in a small arc near that parent's angle.
+    const childrenByParent = new Map<string, GraphNode[]>();
+    ring2plus.forEach((n) => {
+      const par = parent.get(n.id);
+      const key = par && angleOf[par] !== undefined ? par : '__loose__';
+      if (!childrenByParent.has(key)) childrenByParent.set(key, []);
+      childrenByParent.get(key)!.push(n);
+    });
+    childrenByParent.forEach((children, par) => {
+      const baseAngle = par === '__loose__' ? -Math.PI / 2 : angleOf[par];
+      const spread = Math.min(0.5, 0.16 * children.length);
+      children.forEach((n, i) => {
+        const offset = children.length === 1 ? 0 : (i / (children.length - 1) - 0.5) * spread;
+        const a = baseAngle + offset;
+        pos[n.id] = { x: cx + Math.cos(a) * R2, y: cy + Math.sin(a) * R2, ring: 2, angle: a };
+      });
+    });
+
+    // Orphans spread evenly on the outer ring bottom
+    orphans.forEach((n, i) => {
+      const a = Math.PI / 2 + (i - orphans.length / 2) * 0.25;
+      pos[n.id] = { x: cx + Math.cos(a) * R2, y: cy + Math.sin(a) * R2, ring: 2, angle: a };
+    });
+
+    return { positions: pos, root: rootId, rootDegree: adj.get(rootId)!.size };
   }, [nodes, edges, width, height]);
 
   if (nodes.length === 0) {
     return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>No network data.</div>;
   }
 
-  const radiusFor = (node: GraphNode) =>
-    node.group === 'root' ? 14 : node.group === 'leader' ? 12 : 9;
+  const radiusFor = (node: GraphNode) => {
+    if (node.id === root || node.group === 'root') return 18;
+    if (node.group === 'leader') return 13;
+    return positions[node.id]?.ring === 1 ? 11 : 8;
+  };
+  const fillFor = (node: GraphNode) => {
+    if (node.id === root || node.group === 'root') return NODE_FILL.root;
+    if (node.group === 'leader') return NODE_FILL.leader;
+    return NODE_FILL.person;
+  };
+
+  const isConnected = (a: string, b: string) =>
+    edges.some((e) => (e.source === a && e.target === b) || (e.source === b && e.target === a));
 
   return (
-    <svg width={width} height={height} style={{ background: '#fafbff', borderRadius: 8, border: '1px solid #e0e0e0', maxWidth: '100%' }}>
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      width="100%"
+      style={{ background: '#fbfcff', borderRadius: 10, border: '1px solid #e6e9f0', display: 'block' }}
+    >
+      {/* faint ring guides */}
+      <circle cx={width / 2} cy={height / 2} r={Math.min(width, height) * 0.27} fill="none" stroke="#eef1f8" strokeWidth={1} />
+      <circle cx={width / 2} cy={height / 2} r={Math.min(width, height) * 0.44} fill="none" stroke="#f3f5fb" strokeWidth={1} />
+
       {/* Edges */}
       {edges.map((e, i) => {
         const s = positions[e.source], t = positions[e.target];
         if (!s || !t) return null;
-        const dim = hover && hover !== e.source && hover !== e.target;
-        const tip = e.cases && e.cases.length
-          ? `Co-accused in ${e.cases.length} case(s): ${e.cases.join(', ')}`
+        const active = hover && (hover === e.source || hover === e.target);
+        const dim = hover && !active;
+        const touchesRoot = e.source === root || e.target === root;  // direct link spoke
+        const shared = e.cases && e.cases.length;
+        const tip = shared
+          ? `Co-accused in ${e.cases!.length} case(s): ${e.cases!.join(', ')}`
           : (e.type || 'link');
         return (
           <line
             key={i}
             x1={s.x} y1={s.y} x2={t.x} y2={t.y}
-            stroke={EDGE_COLOR[e.type || ''] || '#cfd8dc'}
-            strokeWidth={1 + (e.strength || 1)}
-            strokeOpacity={dim ? 0.15 : 0.7}
+            stroke={active ? '#c62828' : touchesRoot ? '#5c6bc0' : '#cbd0de'}
+            strokeWidth={Math.min(1 + (e.strength || 1), 5)}
+            strokeOpacity={dim ? 0.1 : active ? 0.95 : touchesRoot ? 0.7 : 0.35}
+            strokeLinecap="round"
           >
             <title>{tip}</title>
           </line>
         );
       })}
+
       {/* Nodes */}
       {nodes.map((node) => {
         const p = positions[node.id];
         if (!p) return null;
         const r = radiusFor(node);
-        const dim = hover && hover !== node.id &&
-          !edges.some(e => (e.source === hover && e.target === node.id) || (e.target === hover && e.source === node.id));
+        const dim = hover && hover !== node.id && !isConnected(hover, node.id);
+        const showLabel = p.ring <= 1 || hover === node.id;
+        const highRisk = (node.risk_score ?? 0) >= 70;
+        // Label placement: outward from centre, side-aware to avoid overlap.
+        const onLeft = Math.cos(p.angle) < -0.15;
+        const onRight = Math.cos(p.angle) > 0.15;
+        const labelAnchor = node.id === root ? 'middle' : onLeft ? 'end' : onRight ? 'start' : 'middle';
+        const lx = node.id === root ? 0 : onLeft ? -(r + 6) : onRight ? (r + 6) : 0;
+        const ly = node.id === root ? -(r + 8) : (!onLeft && !onRight) ? -(r + 6) : 4;
         return (
           <g
             key={node.id}
             transform={`translate(${p.x},${p.y})`}
-            style={{ cursor: onNodeClick ? 'pointer' : 'default', opacity: dim ? 0.3 : 1 }}
+            style={{ cursor: onNodeClick ? 'pointer' : 'default', opacity: dim ? 0.28 : 1, transition: 'opacity .15s' }}
             onMouseEnter={() => setHover(node.id)}
             onMouseLeave={() => setHover(null)}
             onClick={() => onNodeClick && onNodeClick(node)}
           >
             <circle
               r={r}
-              fill={GROUP_COLOR[node.group || 'person'] || '#1a237e'}
-              stroke="#fff"
-              strokeWidth={2}
+              fill={fillFor(node)}
+              stroke={highRisk ? '#7f0000' : '#fff'}
+              strokeWidth={highRisk ? 3 : 2}
             />
-            {(hover === node.id || node.group === 'root' || node.group === 'leader') && (
+            <title>
+              {`${node.label}${node.district ? ' · ' + node.district : ''}`}
+              {node.risk_score != null ? ` · risk ${node.risk_score}/100` : ''}
+              {node.id === root ? ` · ${rootDegree} direct link(s)` : ''}
+            </title>
+            {showLabel && (
               <text
-                y={-r - 5}
-                textAnchor="middle"
-                fontSize={11}
-                fontWeight={600}
-                fill="#1a237e"
+                x={lx} y={ly}
+                textAnchor={labelAnchor}
+                fontSize={node.id === root ? 13 : 11}
+                fontWeight={node.id === root ? 700 : 500}
+                fill="#26324d"
+                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: '#fbfcff', strokeWidth: 3 }}
               >
                 {localizePersonName(node.label, language)}
+              </text>
+            )}
+            {/* Direct-link count badge under the focus node */}
+            {node.id === root && (
+              <text
+                y={r + 16}
+                textAnchor="middle"
+                fontSize={11}
+                fontWeight={700}
+                fill="#c62828"
+                style={{ pointerEvents: 'none', paintOrder: 'stroke', stroke: '#fbfcff', strokeWidth: 3 }}
+              >
+                {rootDegree} direct link{rootDegree === 1 ? '' : 's'}
               </text>
             )}
           </g>

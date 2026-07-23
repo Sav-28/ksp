@@ -11,13 +11,14 @@ import FinanceView from '../components/FinanceView';
 import ForecastView from '../components/ForecastView';
 import AuditView from '../components/AuditView';
 import CaseInvestigationView from '../components/CaseInvestigationView';
+import RegisterFIRView from '../components/RegisterFIRView';
 import { apiFetch, isAuthenticated, getUser, clearAuth, AuthUser } from '../api';
 import {
   localizeCrimeType, localizeDistrict, localizeDescription,
   localizePlace, localizeLabel, localizePersonName, buildAnswer
 } from '../locale';
 
-type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'investigation' | 'audit';
+type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'investigation' | 'register' | 'audit';
 
 // Shared data types
 interface CrimeRecord {
@@ -48,6 +49,7 @@ interface PersonBrief {
   district?: string;
   occupation?: string;
   risk_score?: number;
+  photo?: string | null;
 }
 
 interface CrimeDetail {
@@ -89,6 +91,7 @@ interface ChatMessage {
 interface PersonProfile {
   id: number;
   name: string;
+  photo?: string | null;
   demographics?: {
     age?: number; gender?: string; occupation?: string; education?: string;
     socio_economic_status?: string; district?: string; phone?: string;
@@ -137,24 +140,25 @@ const NAV_TABS: { en: string; kn: string }[] = [
   { en: 'FINANCE', kn: 'ಹಣಕಾಸು' },
   { en: 'FORECAST', kn: 'ಮುನ್ಸೂಚನೆ' },
   { en: 'CASE INVESTIGATION', kn: 'ಪ್ರಕರಣ ತನಿಖೆ' },
+  { en: 'REGISTER FIR', kn: 'FIR ನೋಂದಣಿ' },
   { en: 'AUDIT', kn: 'ಲೆಕ್ಕಪರಿಶೋಧನೆ' },
 ];
 
 // Role-based access control (Area 10): which tabs each role may see.
 const ROLE_TABS: Record<string, string[]> = {
-  investigator: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'PROFILES', 'CASE INVESTIGATION'],
+  investigator: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'PROFILES', 'CASE INVESTIGATION', 'REGISTER FIR'],
   analyst: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST'],
-  supervisor: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'AUDIT'],
+  supervisor: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
   policymaker: ['AI ASSISTANT', 'DASHBOARD', 'MAP', 'INSIGHTS', 'FORECAST'],
   // Backward-compatible legacy roles:
-  admin: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'AUDIT'],
-  officer: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION'],
+  admin: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
+  officer: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR'],
 };
 
 const VIEW_TO_TAB: Record<string, string> = {
   chat: 'AI ASSISTANT', dashboard: 'DASHBOARD', network: 'NETWORK', hotspots: 'MAP',
   insights: 'INSIGHTS', profiles: 'PROFILES', finance: 'FINANCE', forecast: 'FORECAST',
-  investigation: 'CASE INVESTIGATION', audit: 'AUDIT',
+  investigation: 'CASE INVESTIGATION', register: 'REGISTER FIR', audit: 'AUDIT',
 };
 
 // Government-styled header component
@@ -191,6 +195,8 @@ const GovHeader = ({
       onNavigate('finance');
     } else if (menuItem === 'FORECAST') {
       onNavigate('forecast');
+    } else if (menuItem === 'REGISTER FIR') {
+      onNavigate('register');
     } else if (menuItem === 'AUDIT') {
       onNavigate('audit');
     } else if (menuItem === 'AI ASSISTANT' || menuItem === 'HOME') {
@@ -520,7 +526,9 @@ const CrimeDetailCard = ({ detail, language, onPersonClick }:
           cursor: canClick ? 'pointer' : 'default',
         }}
       >
-        👤 {localizePersonName(p.name, language)}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}{canClick ? ' 🔎' : ''}
+        {p.photo
+          ? <img src={p.photo} alt="" style={{ width: 20, height: 20, borderRadius: '50%', objectFit: 'cover' }} />
+          : '👤'} {localizePersonName(p.name, language)}{p.age ? `, ${p.age}` : ''}{p.district ? ` · ${localizeDistrict(p.district, language)}` : ''}{canClick ? ' 🔎' : ''}
       </span>
     );
   };
@@ -598,8 +606,10 @@ const PersonProfileCard = ({ p, language }: { p: PersonProfile; language: 'en' |
       borderRadius: '8px', padding: '14px 16px', marginTop: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)'
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
-        <span style={{ fontWeight: 700, color: '#1a237e', fontSize: '16px' }}>
-          👤 {localizePersonName(p.name, language)}
+        <span style={{ fontWeight: 700, color: '#1a237e', fontSize: '16px', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          {p.photo
+            ? <img src={p.photo} alt="" style={{ width: 40, height: 40, borderRadius: 8, objectFit: 'cover', border: '1px solid #cfd8dc' }} />
+            : '👤'} {localizePersonName(p.name, language)}
           {p.is_repeat_offender && (
             <span style={{ marginLeft: 8, fontSize: 11, background: '#c62828', color: '#fff', padding: '2px 8px', borderRadius: 10 }}>
               {t('REPEAT OFFENDER', 'ಪುನರಾವರ್ತಿತ ಅಪರಾಧಿ')}
@@ -1437,6 +1447,8 @@ const ChatPage: React.FC = () => {
             ? (currentLanguage === 'en' ? ' Forecasting' : ' ಮುನ್ಸೂಚನೆ')
             : currentView === 'investigation'
             ? (currentLanguage === 'en' ? ' Case Investigation' : ' ಪ್ರಕರಣ ತನಿಖೆ')
+            : currentView === 'register'
+            ? (currentLanguage === 'en' ? ' Register FIR' : ' FIR ನೋಂದಣಿ')
             : currentView === 'audit'
             ? (currentLanguage === 'en' ? ' Audit Log' : ' ಲೆಕ್ಕಪರಿಶೋಧನೆ')
             : (currentLanguage === 'en' ? ' AI Assistant' : ' AI ಸಹಾಯಕ')}
@@ -1496,6 +1508,13 @@ const ChatPage: React.FC = () => {
       {currentView === 'investigation' && (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
           <CaseInvestigationView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Register FIR view (role-gated write workflow) */}
+      {currentView === 'register' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
+          <RegisterFIRView language={currentLanguage} />
         </div>
       )}
 

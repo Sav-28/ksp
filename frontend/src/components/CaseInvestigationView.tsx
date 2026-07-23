@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
-import { apiFetch } from '../api';
+import { apiFetch, getUser } from '../api';
 import {
   localizeDistrict, localizeCrimeType, localizePersonName, localizePlace, localizeDescription,
 } from '../locale';
+
+const ALL_STATUSES = [
+  'Registered', 'Under Investigation', 'Chargesheet Filed', 'Closed', 'Convicted', 'Acquitted',
+];
+const TERMINAL_STATUSES = ['Closed', 'Convicted', 'Acquitted'];
 
 interface PersonBrief {
   id: number; name: string; age?: number; gender?: string;
@@ -34,23 +39,72 @@ const CaseInvestigationView = ({ language }: { language: 'en' | 'kn' }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Status-management state. Gate by ROLE directly (robust — always present on
+  // the stored user, unlike the login-time capability flags which require a
+  // fresh login to appear). Mirrors the backend RBAC.
+  const user = getUser();
+  const role = user?.role || '';
+  const canUpdateCase = ['investigator', 'supervisor', 'admin'].includes(role);
+  const canCloseCase = ['supervisor', 'admin'].includes(role);
+  const [newStatus, setNewStatus] = useState('');
+  const [outcome, setOutcome] = useState('');
+  const [updating, setUpdating] = useState(false);
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+  const [statusErr, setStatusErr] = useState<string | null>(null);
+
   const investigate = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const q = fir.trim();
     if (!q) return;
     setLoading(true); setError(null); setDetail(null);
+    setStatusMsg(null); setStatusErr(null);
     try {
       const res = await apiFetch(`/api/crime/${encodeURIComponent(q)}`);
       if (res.status === 404) {
         setError(t(`No case found with Crime No ${q}.`, `${q} ಸಂಖ್ಯೆಯ ಪ್ರಕರಣ ಸಿಗಲಿಲ್ಲ.`));
         return;
       }
-      setDetail(await res.json());
+      const data = await res.json();
+      setDetail(data);
+      setNewStatus(data?.police?.case_status || data?.investigation?.status || 'Registered');
+      setOutcome('');
     } catch (err: any) {
       setError(err.message === 'UNAUTHORIZED'
         ? t('Session expired. Please log in again.', 'ಸೆಷನ್ ಮುಗಿದಿದೆ. ಮತ್ತೆ ಲಾಗಿನ್ ಮಾಡಿ.')
         : t('Unable to load the case.', 'ಪ್ರಕರಣ ಲೋಡ್ ಮಾಡಲಾಗಲಿಲ್ಲ.'));
     } finally { setLoading(false); }
+  };
+
+  const updateStatus = async () => {
+    if (!detail) return;
+    setStatusErr(null); setStatusMsg(null);
+    const isTerminal = TERMINAL_STATUSES.includes(newStatus);
+    if (isTerminal && !canCloseCase) {
+      setStatusErr(t('Closing a case requires a supervisor or admin.',
+                     'ಪ್ರಕರಣ ಮುಚ್ಚಲು ಮೇಲ್ವಿಚಾರಕ ಅಥವಾ ನಿರ್ವಾಹಕ ಅಗತ್ಯ.'));
+      return;
+    }
+    const body: Record<string, any> = { investigation_status: newStatus };
+    if (isTerminal && outcome) body.case_outcome = outcome;
+    setUpdating(true);
+    try {
+      const res = await apiFetch(`/api/crimes/${encodeURIComponent(detail.fir_number)}`,
+        { method: 'PATCH', body: JSON.stringify(body) });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 200) {
+        setDetail(data.detail);
+        setNewStatus(data.detail?.police?.case_status || data.detail?.investigation?.status || newStatus);
+        setStatusMsg(t(`Status updated to "${newStatus}".`, `ಸ್ಥಿತಿ "${newStatus}" ಗೆ ನವೀಕರಿಸಲಾಗಿದೆ.`));
+      } else if (res.status === 403) {
+        setStatusErr(data.detail || t('You are not authorized for this action.', 'ಈ ಕ್ರಿಯೆಗೆ ಅಧಿಕಾರವಿಲ್ಲ.'));
+      } else {
+        setStatusErr(data.detail || t('Update failed.', 'ನವೀಕರಣ ವಿಫಲವಾಗಿದೆ.'));
+      }
+    } catch (err: any) {
+      setStatusErr(err.message === 'UNAUTHORIZED'
+        ? t('Session expired. Please log in again.', 'ಸೆಷನ್ ಮುಗಿದಿದೆ.')
+        : t('Update failed.', 'ನವೀಕರಣ ವಿಫಲವಾಗಿದೆ.'));
+    } finally { setUpdating(false); }
   };
 
   const p = detail?.police || {};
@@ -92,9 +146,14 @@ const CaseInvestigationView = ({ language }: { language: 'en' | 'kn' }) => {
       )}
 
       {detail && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 900 }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
+          gap: 16,
+          alignItems: 'start',
+        }}>
           {/* Case header */}
-          <Section title={`${localizeCrimeType(detail.crime_type, language)} · ${detail.fir_number}`} accent="#1a237e">
+          <Section title={`${localizeCrimeType(detail.crime_type, language)} · ${detail.fir_number}`} accent="#1a237e" full>
             <Grid>
               <Field label={t('Crime No', 'ಕ್ರೈಮ್ ಸಂಖ್ಯೆ')} value={p.crime_no || detail.fir_number} mono />
               <Field label={t('Case No', 'ಪ್ರಕರಣ ಸಂಖ್ಯೆ')} value={p.case_no} mono />
@@ -110,8 +169,55 @@ const CaseInvestigationView = ({ language }: { language: 'en' | 'kn' }) => {
             )}
           </Section>
 
+          {/* Case status management — role-gated (investigator/supervisor/admin) */}
+          {canUpdateCase && (
+            <Section title={t('Update Case Status', 'ಪ್ರಕರಣ ಸ್ಥಿತಿ ನವೀಕರಿಸಿ')} accent="#6a1b9a" full>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  <label style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('Status', 'ಸ್ಥಿತಿ')}</label>
+                  <select value={newStatus} onChange={(e) => setNewStatus(e.target.value)}
+                    style={{ padding: '9px 11px', border: '1px solid #cfd8dc', borderRadius: 6, fontSize: 14, minWidth: 200 }}>
+                    {ALL_STATUSES.map((s) => {
+                      const terminal = TERMINAL_STATUSES.includes(s);
+                      const locked = terminal && !canCloseCase;
+                      return (
+                        <option key={s} value={s} disabled={locked}>
+                          {s}{locked ? ` — ${t('supervisor only', 'ಮೇಲ್ವಿಚಾರಕ ಮಾತ್ರ')}` : ''}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                {TERMINAL_STATUSES.includes(newStatus) && canCloseCase && (
+                  <div style={{ display: 'flex', flexDirection: 'column' }}>
+                    <label style={{ fontSize: 12, color: '#888', marginBottom: 4 }}>{t('Outcome (optional)', 'ಫಲಿತಾಂಶ (ಐಚ್ಛಿಕ)')}</label>
+                    <input value={outcome} onChange={(e) => setOutcome(e.target.value)}
+                      placeholder={t('e.g. Solved / Chargesheeted', 'ಉದಾ. ಪರಿಹರಿಸಲಾಗಿದೆ')}
+                      style={{ padding: '9px 11px', border: '1px solid #cfd8dc', borderRadius: 6, fontSize: 14, minWidth: 200 }} />
+                  </div>
+                )}
+                <button onClick={updateStatus} disabled={updating}
+                  style={{ background: TERMINAL_STATUSES.includes(newStatus) ? '#c62828' : '#6a1b9a', color: '#fff',
+                           border: 'none', borderRadius: 6, padding: '10px 22px', fontSize: 14, fontWeight: 600,
+                           cursor: updating ? 'default' : 'pointer', opacity: updating ? 0.6 : 1 }}>
+                  {updating ? t('Saving…', 'ಉಳಿಸಲಾಗುತ್ತಿದೆ…')
+                    : TERMINAL_STATUSES.includes(newStatus) ? '🔒 ' + t('Close Case', 'ಪ್ರಕರಣ ಮುಚ್ಚಿ')
+                    : '💾 ' + t('Update Status', 'ಸ್ಥಿತಿ ನವೀಕರಿಸಿ')}
+                </button>
+              </div>
+              {!canCloseCase && (
+                <div style={{ fontSize: 11, color: '#90a4ae', marginTop: 8 }}>
+                  {t('Note: closing a case (Closed / Convicted / Acquitted) requires a supervisor or admin.',
+                     'ಸೂಚನೆ: ಪ್ರಕರಣ ಮುಚ್ಚಲು ಮೇಲ್ವಿಚಾರಕ ಅಥವಾ ನಿರ್ವಾಹಕ ಅಗತ್ಯ.')}
+                </div>
+              )}
+              {statusMsg && <div style={{ marginTop: 10, color: '#2e7d32', fontSize: 13 }}>✅ {statusMsg}</div>}
+              {statusErr && <div style={{ marginTop: 10, color: '#c62828', fontSize: 13 }}>⚠️ {statusErr}</div>}
+            </Section>
+          )}
+
           {/* Location */}
-          <Section title={t('Incident Location', 'ಘಟನೆ ಸ್ಥಳ')} accent="#00695c">
+          <Section title={t('Incident Location', 'ಘಟನೆ ಸ್ಥಳ')} accent="#00695c" full>
             <Grid>
               <Field label={t('District', 'ಜಿಲ್ಲೆ')} value={localizeDistrict(detail.district, language)} />
               <Field label={t('Place / Station area', 'ಸ್ಥಳ')} value={localizePlace(detail.police_station, language)} />
@@ -183,8 +289,8 @@ const CaseInvestigationView = ({ language }: { language: 'en' | 'kn' }) => {
 };
 
 // --- small presentational helpers -----------------------------------------
-const Section = ({ title, accent, children }: { title: string; accent: string; children: React.ReactNode }) => (
-  <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderTop: `4px solid ${accent}`, borderRadius: 8, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}>
+const Section = ({ title, accent, children, full }: { title: string; accent: string; children: React.ReactNode; full?: boolean }) => (
+  <div style={{ background: '#fff', border: '1px solid #e0e0e0', borderTop: `4px solid ${accent}`, borderRadius: 8, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.06)', gridColumn: full ? '1 / -1' : undefined }}>
     <div style={{ fontWeight: 700, color: accent, fontSize: 15, marginBottom: 10 }}>{title}</div>
     {children}
   </div>

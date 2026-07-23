@@ -54,7 +54,28 @@ def create_tables():
     except Exception:
         # Official schema is additive; never block startup if it can't build.
         pass
+    _ensure_columns()
     create_views()
+
+
+def _ensure_columns():
+    """Lightweight, idempotent migration: add columns introduced after the
+    initial schema to an existing database. SQLAlchemy's create_all only
+    creates missing *tables*, not missing *columns*, so we add them by hand.
+    Safe to run on every startup — a duplicate-column error is ignored."""
+    from sqlalchemy import text
+    additive = [
+        ("crimes", "created_by", "VARCHAR(100)"),
+        ("crimes", "created_at", "DATETIME"),
+        ("persons", "photo", "TEXT"),
+    ]
+    for table, column, coltype in additive:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
+        except Exception:
+            # Column already exists (or table missing) — nothing to do.
+            pass
 
 
 # SQL that projects the normalized official FIR tables back into the flat
