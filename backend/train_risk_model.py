@@ -92,8 +92,8 @@ def main():
     for fi in importances[:5]:
         print(f"    {fi['feature']:16} {fi['importance']:.3f}")
     print("=" * 56)
-    print(f"[DONE] Saved model → {MODEL_PATH}")
-    print(f"[DONE] Saved metrics → {METRICS_PATH}")
+    print(f"[DONE] Saved model -> {MODEL_PATH}")
+    print(f"[DONE] Saved metrics -> {METRICS_PATH}")
 
 
 if __name__ == "__main__":
