@@ -1,0 +1,94 @@
+{
+  "model": "LogisticRegression",
+  "target": "repeat offender (accused in 2+ cases)",
+  "features": [
+    "age",
+    "is_male",
+    "ses_rank",
+    "edu_rank",
+    "gang_member",
+    "avg_severity",
+    "max_severity",
+    "urban",
+    "recent_activity"
+  ],
+  "mean": [
+    42.893939,
+    0.755682,
+    1.439394,
+    2.418561,
+    0.045455,
+    5.065974,
+    5.75947,
+    0.706439,
+    0.929924
+  ],
+  "std": [
+    15.074817,
+    0.429682,
+    1.230962,
+    1.418558,
+    0.208299,
+    1.710436,
+    2.149019,
+    0.455393,
+    0.255275
+  ],
+  "coef": [
+    -0.003428,
+    0.048413,
+    0.146328,
+    0.058747,
+    0.360893,
+    -4.814808,
+    5.928355,
+    -0.016802,
+    0.96064
+  ],
+  "intercept": 0.459821,
+  "n_samples": 661,
+  "test_size": 133,
+  "repeat_rate": 0.442,
+  "roc_auc": 0.992,
+  "accuracy": 0.977,
+  "feature_importances": [
+    {
+      "feature": "max_severity",
+      "importance": 5.9284
+    },
+    {
+      "feature": "avg_severity",
+      "importance": 4.8148
+    },
+    {
+      "feature": "recent_activity",
+      "importance": 0.9606
+    },
+    {
+      "feature": "gang_member",
+      "importance": 0.3609
+    },
+    {
+      "feature": "ses_rank",
+      "importance": 0.1463
+    },
+    {
+      "feature": "edu_rank",
+      "importance": 0.0587
+    },
+    {
+      "feature": "is_male",
+      "importance": 0.0484
+    },
+    {
+      "feature": "urban",
+      "importance": 0.0168
+    },
+    {
+      "feature": "age",
+      "importance": 0.0034
+    }
+  ],
+  "trained_on": "synthetic seeded dataset",
+  "trained_at": "2026-07-24"
+}

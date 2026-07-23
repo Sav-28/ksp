@@ -123,8 +123,8 @@ def on_startup():
         # (the API then falls back to the deterministic heuristic score).
         try:
             import os as _os
-            from src.ml.risk_model import _MODEL_PATH
-            if not _os.path.isfile(_MODEL_PATH):
+            from src.ml.risk_model import _MODEL_JSON
+            if not _os.path.isfile(_MODEL_JSON):
                 logging.info("Training offender-risk model...")
                 import train_risk_model
                 train_risk_model.main()
