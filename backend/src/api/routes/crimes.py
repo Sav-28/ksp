@@ -24,38 +24,16 @@ from src.database.models import Crime, FIRDetails, Person, CasePerson, AuditLog
 from src.database import models_fir as F
 from src.api.auth import (
     require_role, get_user_role, CAN_REGISTER_ROLES, CAN_UPDATE_ROLES,
+    CAN_CLOSE_ROLES,
 )
 from src.services.crime_detail import get_crime_detail
+from src.data.karnataka import DISTRICTS, DISTRICT_COORDS, POLICE_STATIONS
 
 router = APIRouter()
 
 # --- Reference data for the registration form -----------------------------
-# Kept in sync with the seed dataset (generate_narrative_data.py).
-DISTRICTS = [
-    "Bengaluru Urban", "Bengaluru Rural", "Mysuru", "Belagavi", "Kalaburagi",
-    "Mangaluru", "Hubli", "Dharwad", "Tumakuru", "Raichur",
-]
-
-DISTRICT_COORDS = {
-    "Bengaluru Urban": (12.9716, 77.5946), "Bengaluru Rural": (13.2846, 77.5750),
-    "Mysuru": (12.2958, 76.6394), "Belagavi": (15.8497, 74.5060),
-    "Kalaburagi": (17.3297, 76.8343), "Mangaluru": (12.8700, 74.9200),
-    "Hubli": (15.3647, 75.1240), "Dharwad": (15.4589, 75.0078),
-    "Tumakuru": (13.3409, 77.1010), "Raichur": (16.2076, 77.3463),
-}
-
-POLICE_STATIONS = {
-    "Bengaluru Urban": ["Koramangala", "Indiranagar", "Jayanagar", "Whitefield", "MG Road", "Yelahanka"],
-    "Bengaluru Rural": ["Devanahalli", "Hoskote", "Nelamangala"],
-    "Mysuru": ["Mysuru City", "K.R. Nagar", "Nazarbad", "Vijayanagar"],
-    "Belagavi": ["Belagavi City", "Khanapur", "Gokak"],
-    "Kalaburagi": ["Kalaburagi City", "Gulbarga", "Aland"],
-    "Mangaluru": ["Mangaluru City", "Ullal", "Surathkal"],
-    "Hubli": ["Hubli City", "Gokul Road", "Vidyanagar"],
-    "Dharwad": ["Dharwad City", "Kelageri"],
-    "Tumakuru": ["Tumakuru City", "Sira", "Tiptur"],
-    "Raichur": ["Raichur City", "Sindhanur", "Manvi"],
-}
+# Districts / coordinates / police stations come from src/data/karnataka.py
+# (all 31 Karnataka districts + representative police stations).
 
 CRIME_TYPES = [
     ("379", "Theft"), ("302", "Murder"), ("356", "Snatching"), ("392", "Robbery"),
@@ -79,6 +57,20 @@ INVESTIGATION_STATUSES = [
     "Registered", "Under Investigation", "Chargesheet Filed",
     "Closed", "Convicted", "Acquitted",
 ]
+# Officer ranks / designations an investigating officer realistically holds
+# (mirrors the seeded official schema).
+OFFICER_RANKS = [
+    "Police Inspector", "Police Sub-Inspector", "Assistant Sub-Inspector",
+    "Deputy Superintendent of Police", "Circle Inspector", "Head Constable",
+]
+OFFICER_DESIGNATIONS = [
+    "Station House Officer", "Investigating Officer", "Circle Inspector",
+    "Additional Superintendent", "Beat Officer",
+]
+# Terminal (case-closing) dispositions — restricted to supervisor/admin.
+TERMINAL_STATUSES = {"Closed", "Convicted", "Acquitted"}
+# Default case outcome to record when moving to a terminal status.
+_OUTCOME_FOR_STATUS = {"Closed": "Closed", "Convicted": "Convicted", "Acquitted": "Acquitted"}
 PERSON_ROLES = ["accused", "victim", "witness", "complainant"]
 GENDERS = ["Male", "Female", "Other"]
 
@@ -120,6 +112,8 @@ async def registration_reference(
         "police_stations": POLICE_STATIONS,
         "crime_types": [{"name": name, "ipc": sec} for sec, name in CRIME_TYPES],
         "investigation_statuses": INVESTIGATION_STATUSES,
+        "officer_ranks": OFFICER_RANKS,
+        "officer_designations": OFFICER_DESIGNATIONS,
         "person_roles": PERSON_ROLES,
         "genders": GENDERS,
         "education_levels": EDUCATION,
@@ -181,8 +175,60 @@ def _lookup_id(db: Session, model, id_col, name_col, name):
     return getattr(row, id_col.key) if row else None
 
 
+def _ensure_rank(db: Session, name: str) -> int:
+    """Find or create a Rank by name; return its id."""
+    r = db.query(F.Rank).filter(F.Rank.RankName == name).first()
+    if r:
+        return r.RankID
+    new_id = (db.query(func.max(F.Rank.RankID)).scalar() or 0) + 1
+    db.add(F.Rank(RankID=new_id, RankName=name, Hierarchy=new_id, Active=True))
+    db.flush()
+    return new_id
+
+
+def _ensure_designation(db: Session, name: str) -> int:
+    """Find or create a Designation by name; return its id."""
+    d = db.query(F.Designation).filter(F.Designation.DesignationName == name).first()
+    if d:
+        return d.DesignationID
+    new_id = (db.query(func.max(F.Designation.DesignationID)).scalar() or 0) + 1
+    db.add(F.Designation(DesignationID=new_id, DesignationName=name, Active=True, SortOrder=new_id))
+    db.flush()
+    return new_id
+
+
+def _resolve_officer(db: Session, name: Optional[str], district_id: int, unit_id: int,
+                     rank_name: Optional[str] = None, desig_name: Optional[str] = None) -> Optional[int]:
+    """Return the official Employee id for the investigating officer, creating a
+    record (with the given rank/designation, posted to the station) if new — so
+    the case dossier's officer/rank/designation panel is populated."""
+    name = (name or "").strip()
+    if not name:
+        return None
+    rank_name = (rank_name or "Police Inspector").strip() or "Police Inspector"
+    desig_name = (desig_name or "Investigating Officer").strip() or "Investigating Officer"
+    rank_id = _ensure_rank(db, rank_name)
+    desig_id = _ensure_designation(db, desig_name)
+
+    emp = db.query(F.Employee).filter(F.Employee.FirstName == name).first()
+    if emp:
+        # Keep the officer's rank/designation current with this filing.
+        emp.RankID = rank_id
+        emp.DesignationID = desig_id
+        return emp.EmployeeID
+    new_id = (db.query(func.max(F.Employee.EmployeeID)).scalar() or 0) + 1
+    db.add(F.Employee(
+        EmployeeID=new_id, FirstName=name, DistrictID=district_id, UnitID=unit_id or None,
+        RankID=rank_id, DesignationID=desig_id, GenderID=1,
+    ))
+    db.flush()
+    return new_id
+
+
 def _create_official_case(db: Session, crime: Crime, fir: FIRDetails,
-                          district_id: int, unit_id: int) -> None:
+                          district_id: int, unit_id: int,
+                          officer_rank: Optional[str] = None,
+                          officer_designation: Optional[str] = None) -> None:
     """Create the official CaseMaster + occurrence record so the FIR is a
     first-class citizen of the system-of-record schema (and the detail view's
     police/court panel is populated)."""
@@ -197,12 +243,23 @@ def _create_official_case(db: Session, crime: Crime, fir: FIRDetails,
                            F.CaseStatusMaster.CaseStatusName,
                            fir.investigation_status or "Registered")
     court = db.query(F.Court).filter(F.Court.DistrictID == district_id).first()
+    if not court:
+        # New district (no court seeded) — create its District & Sessions Court.
+        dname = crime.district or "District"
+        court_id = (db.query(func.max(F.Court.CourtID)).scalar() or 0) + 1
+        court = F.Court(CourtID=court_id, CourtName=f"{dname} District & Sessions Court",
+                        DistrictID=district_id, StateID=1, Active=True)
+        db.add(court)
+        db.flush()
+    officer_id = _resolve_officer(db, fir.investigating_officer, district_id, unit_id,
+                                  officer_rank, officer_designation)
 
     db.add(F.CaseMaster(
         CaseMasterID=crime.id,  # aligned id space (same bridge as the migration)
         CrimeNo=crime.fir_number,
         CaseNo=crime.fir_number[-9:],
         CrimeRegisteredDate=crime.date_occurred,
+        PolicePersonID=officer_id,
         PoliceStationID=unit_id or None,
         CaseCategoryID=1,  # FIR
         GravityOffenceID=1 if crime.crime_type in HEINOUS else 2,
@@ -352,7 +409,11 @@ async def register_crime(
         db.add(fir)
 
         # Mirror into the official FIR schema (best-effort; keeps CrimeNo real).
-        _create_official_case(db, crime, fir, district_id, unit_id)
+        _create_official_case(
+            db, crime, fir, district_id, unit_id,
+            officer_rank=(request.get("investigating_officer_rank") or "").strip() or None,
+            officer_designation=(request.get("investigating_officer_designation") or "").strip() or None,
+        )
 
         linked = []
         for spec in persons_in:
@@ -390,6 +451,24 @@ async def register_crime(
     return {"fir_number": fir_number, "created_by": username, "detail": detail}
 
 
+def _sync_official_status(db: Session, crime: Crime, status_name: str) -> None:
+    """Keep the official CaseMaster.CaseStatusID in sync with the analytics
+    status, so the Case Investigation view (which reads the official schema)
+    reflects the change. Creates the status master row if it doesn't exist."""
+    cm = db.query(F.CaseMaster).filter(F.CaseMaster.CrimeNo == crime.fir_number).first()
+    if not cm:
+        return  # no official record (rare) — analytics update still applies
+    sm = db.query(F.CaseStatusMaster).filter(
+        F.CaseStatusMaster.CaseStatusName == status_name
+    ).first()
+    if not sm:
+        next_id = (db.query(func.max(F.CaseStatusMaster.CaseStatusID)).scalar() or 0) + 1
+        sm = F.CaseStatusMaster(CaseStatusID=next_id, CaseStatusName=status_name)
+        db.add(sm)
+        db.flush()
+    cm.CaseStatusID = sm.CaseStatusID
+
+
 @router.patch("/crimes/{fir_number}")
 async def update_investigation(
     fir_number: str,
@@ -397,7 +476,13 @@ async def update_investigation(
     db: Session = Depends(get_db),
     username: str = Depends(require_role(*CAN_UPDATE_ROLES)),
 ) -> Dict[str, Any]:
-    """Update an FIR's investigation status / outcome (investigator, supervisor, admin)."""
+    """Update an FIR's investigation status / outcome.
+
+    RBAC (two-tier):
+      - Advancing status (Registered/Under Investigation/Chargesheet Filed):
+        investigator, supervisor, admin.
+      - CLOSING a case (Closed/Convicted/Acquitted): supervisor, admin only.
+    """
     crime = db.query(Crime).filter(Crime.fir_number == fir_number).first()
     if not crime:
         raise HTTPException(status_code=404, detail=f"Case {fir_number} not found")
@@ -411,8 +496,21 @@ async def update_investigation(
     if new_status is not None:
         if new_status not in INVESTIGATION_STATUSES:
             raise HTTPException(status_code=422, detail=f"Invalid status: '{new_status}'")
+        # Closing a case is a supervisory action.
+        if new_status in TERMINAL_STATUSES and get_user_role(username) not in CAN_CLOSE_ROLES:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Closing a case requires a supervisor or admin.",
+            )
         fir.investigation_status = new_status
-    if "case_outcome" in request:
+        _sync_official_status(db, crime, new_status)
+        # Auto-fill closing metadata for terminal dispositions.
+        if new_status in TERMINAL_STATUSES:
+            fir.closed_date = date.today()
+            if not request.get("case_outcome"):
+                fir.case_outcome = _OUTCOME_FOR_STATUS.get(new_status, "Closed")
+
+    if "case_outcome" in request and request.get("case_outcome"):
         fir.case_outcome = request.get("case_outcome")
     if "investigating_officer" in request:
         fir.investigating_officer = request.get("investigating_officer")

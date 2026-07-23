@@ -6,7 +6,8 @@ from typing import Dict, Any
 import logging
 
 from src.api.auth import (
-    authenticate, create_token, OFFICERS, get_current_user, can_register,
+    authenticate, create_token, OFFICERS, get_current_user,
+    can_register, can_update_case, can_close_case,
 )
 
 router = APIRouter()
@@ -45,6 +46,8 @@ async def login(request: Dict[str, Any]) -> Dict[str, Any]:
         "name": officer["name"],
         "role": officer["role"],
         "can_register": can_register(username),
+        "can_update_case": can_update_case(username),
+        "can_close_case": can_close_case(username),
     }
 
 
@@ -57,4 +60,6 @@ async def me(username: str = Depends(get_current_user)) -> Dict[str, Any]:
         "name": officer.get("name"),
         "role": officer.get("role"),
         "can_register": can_register(username),
+        "can_update_case": can_update_case(username),
+        "can_close_case": can_close_case(username),
     }

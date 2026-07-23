@@ -198,6 +198,22 @@ def require_role(*allowed_roles: str):
 CAN_REGISTER_ROLES = ("investigator", "officer", "supervisor", "admin")
 # Roles allowed to UPDATE an existing investigation's status/outcome.
 CAN_UPDATE_ROLES = ("investigator", "supervisor", "admin")
+# Roles allowed to CLOSE a case (terminal disposition) — a supervisory action.
+CAN_CLOSE_ROLES = ("supervisor", "admin")
+
+
+def can_update_case(username: str) -> bool:
+    """Whether the user's role may update an investigation status."""
+    if not AUTH_REQUIRED:
+        return True
+    return get_user_role(username) in CAN_UPDATE_ROLES
+
+
+def can_close_case(username: str) -> bool:
+    """Whether the user's role may close a case (terminal disposition)."""
+    if not AUTH_REQUIRED:
+        return True
+    return get_user_role(username) in CAN_CLOSE_ROLES
 
 
 def can_register(username: str) -> bool:

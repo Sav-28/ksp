@@ -18,6 +18,8 @@ export interface AuthUser {
   name: string;
   role: string;
   can_register?: boolean;
+  can_update_case?: boolean;
+  can_close_case?: boolean;
 }
 
 export const getToken = (): string | null => localStorage.getItem(TOKEN_KEY);
@@ -56,6 +58,8 @@ export const login = async (username: string, password: string): Promise<AuthUse
   const user: AuthUser = {
     username: data.username, name: data.name, role: data.role,
     can_register: data.can_register,
+    can_update_case: data.can_update_case,
+    can_close_case: data.can_close_case,
   };
   setAuth(data.token, user);
   return user;

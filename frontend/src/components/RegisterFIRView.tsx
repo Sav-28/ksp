@@ -1,5 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { apiFetch, getUser, API_BASE } from '../api';
+
+// Karnataka geographic center (fallback map view before a district is picked).
+const KARNATAKA_CENTER: [number, number] = [15.3173, 75.7139];
+
+// Distance (km) beyond the district HQ at which we warn the officer that the
+// pin looks outside the selected district's jurisdiction.
+const JURISDICTION_WARN_KM = 50;
+
+// Great-circle distance between two lat/long points, in kilometres.
+const haversineKm = (la1: number, lo1: number, la2: number, lo2: number): number => {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLa = toRad(la2 - la1);
+  const dLo = toRad(lo2 - lo1);
+  const a = Math.sin(dLa / 2) ** 2 +
+    Math.cos(toRad(la1)) * Math.cos(toRad(la2)) * Math.sin(dLo / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+const PIN_ICON = L.divIcon({
+  html: '<div style="font-size:26px;line-height:26px">📍</div>',
+  className: 'ksp-pin', iconSize: [26, 26], iconAnchor: [13, 26],
+});
 
 /**
  * REGISTER FIR — the platform's write workflow (Area 10, role-gated).
@@ -13,6 +37,8 @@ interface RefData {
   police_stations: Record<string, string[]>;
   crime_types: { name: string; ipc: string }[];
   investigation_statuses: string[];
+  officer_ranks: string[];
+  officer_designations: string[];
   person_roles: string[];
   genders: string[];
   education_levels: string[];
@@ -77,16 +103,142 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
   const [description, setDescription] = useState('');
   const [ipcSections, setIpcSections] = useState('');
   const [io, setIo] = useState('');
+  const [ioRank, setIoRank] = useState('Police Inspector');
+  const [ioDesignation, setIoDesignation] = useState('Investigating Officer');
   const [statusVal, setStatusVal] = useState('Registered');
   const [arrestMade, setArrestMade] = useState(false);
 
   const [persons, setPersons] = useState<PersonRow[]>([emptyPerson('complainant')]);
+
+  // Precise crime location (picked on the map / geocoded / GPS).
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [placeQuery, setPlaceQuery] = useState('');
+  const [geocoding, setGeocoding] = useState(false);
+  const [suggestions, setSuggestions] = useState<{ name: string; lat: number; lon: number }[]>([]);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mapDivRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  // Jurisdiction check: distance (km) from the selected district when the pin
+  // looks far outside it, plus the officer's explicit confirmation to proceed.
+  const [jurisdictionKm, setJurisdictionKm] = useState<number | null>(null);
+  const [locationConfirmed, setLocationConfirmed] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const today = new Date().toISOString().slice(0, 10);
+
+  // Drop/move the marker and record the coordinates.
+  const placeMarker = (la: number, lo: number, zoom?: number) => {
+    setLat(la); setLng(lo);
+    const map = mapRef.current;
+    if (!map) return;
+    if (markerRef.current) markerRef.current.setLatLng([la, lo]);
+    else markerRef.current = L.marker([la, lo], { icon: PIN_ICON }).addTo(map);
+    map.setView([la, lo], zoom ?? map.getZoom());
+  };
+
+  // Initialize the Leaflet map once the reference data (and the map div) exist.
+  useEffect(() => {
+    if (!ref || !mapDivRef.current || mapRef.current) return;
+    const map = L.map(mapDivRef.current).setView(KARNATAKA_CENTER, 7);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors', maxZoom: 19,
+    }).addTo(map);
+    map.on('click', (e: L.LeafletMouseEvent) => placeMarker(e.latlng.lat, e.latlng.lng));
+    mapRef.current = map;
+    // Leaflet needs a size recalculation when mounted inside a flex/tab layout.
+    setTimeout(() => map.invalidateSize(), 100);
+    return () => { map.remove(); mapRef.current = null; markerRef.current = null; };
+  }, [ref]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Recenter to the chosen district (helps the officer zoom to the right area).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && district && ref?.district_coords[district]) {
+      const c = ref.district_coords[district];
+      if (lat == null) map.setView([c.latitude, c.longitude], 12);
+    }
+  }, [district]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Jurisdiction check: recompute whenever the pin or district changes. Warns
+  // (but doesn't block) if the location is far from the selected district.
+  useEffect(() => {
+    setLocationConfirmed(false);
+    if (lat == null || lng == null || !district || !ref?.district_coords[district]) {
+      setJurisdictionKm(null);
+      return;
+    }
+    const c = ref.district_coords[district];
+    const km = haversineKm(lat, lng, c.latitude, c.longitude);
+    setJurisdictionKm(km > JURISDICTION_WARN_KM ? Math.round(km) : null);
+  }, [lat, lng, district, ref]);
+
+  // Fetch up to 5 location suggestions (debounced) for the autocomplete dropdown.
+  const fetchSuggestions = async (q: string) => {
+    try {
+      const full = district ? `${q}, ${district}, Karnataka, India` : `${q}, Karnataka, India`;
+      const r = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=in&q=${encodeURIComponent(full)}`);
+      const arr = await r.json();
+      setSuggestions((arr || []).map((a: any) => ({
+        name: a.display_name, lat: parseFloat(a.lat), lon: parseFloat(a.lon),
+      })));
+    } catch { setSuggestions([]); }
+  };
+
+  const onPlaceQueryChange = (v: string) => {
+    setPlaceQuery(v);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (v.trim().length < 3) { setSuggestions([]); return; }
+    searchTimer.current = setTimeout(() => fetchSuggestions(v.trim()), 400);
+  };
+
+  const pickSuggestion = (s: { name: string; lat: number; lon: number }) => {
+    setPlaceQuery(s.name);
+    setSuggestions([]);
+    placeMarker(s.lat, s.lon, 16);
+  };
+
+  // Geocode a landmark/address (OpenStreetMap Nominatim) → drop the pin. Used by
+  // the Locate button / Enter key. Prefers the first suggestion if available.
+  const geocode = async () => {
+    const q = placeQuery.trim();
+    if (!q) return;
+    if (suggestions.length) { pickSuggestion(suggestions[0]); return; }
+    setGeocoding(true); setError(null);
+    try {
+      const full = district ? `${q}, ${district}, Karnataka, India` : `${q}, Karnataka, India`;
+      const r = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=in&q=${encodeURIComponent(full)}`);
+      const arr = await r.json();
+      if (arr && arr.length) {
+        placeMarker(parseFloat(arr[0].lat), parseFloat(arr[0].lon), 16);
+      } else {
+        setError(t('Location not found — try a nearby landmark or click on the map.',
+                   'ಸ್ಥಳ ಸಿಗಲಿಲ್ಲ — ಹತ್ತಿರದ ಸ್ಥಳ ಪ್ರಯತ್ನಿಸಿ ಅಥವಾ ನಕ್ಷೆಯಲ್ಲಿ ಕ್ಲಿಕ್ ಮಾಡಿ.'));
+      }
+    } catch {
+      setError(t('Could not search the location.', 'ಸ್ಥಳ ಹುಡುಕಲಾಗಲಿಲ್ಲ.'));
+    } finally { setGeocoding(false); }
+  };
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => placeMarker(pos.coords.latitude, pos.coords.longitude, 16),
+      () => setError(t('Could not get your GPS location.', 'GPS ಸ್ಥಳ ಪಡೆಯಲಾಗಲಿಲ್ಲ.')));
+  };
+
+  const clearLocation = () => {
+    if (markerRef.current && mapRef.current) mapRef.current.removeLayer(markerRef.current);
+    markerRef.current = null;
+    setLat(null); setLng(null); setPlaceQuery('');
+    setJurisdictionKm(null); setLocationConfirmed(false);
+  };
 
   useEffect(() => {
     (async () => {
@@ -156,7 +308,9 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
   const resetForm = () => {
     setCrimeType(''); setDistrict(''); setPoliceStation(''); setDateOccurred('');
     setDescription(''); setIpcSections(''); setStatusVal('Registered'); setArrestMade(false);
+    setIoRank('Police Inspector'); setIoDesignation('Investigating Officer');
     setPersons([emptyPerson('complainant')]);
+    clearLocation();
   };
 
   const submit = async () => {
@@ -164,6 +318,11 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
     if (!crimeType) { setError(t('Please select a crime type.', 'ಅಪರಾಧ ಪ್ರಕಾರವನ್ನು ಆಯ್ಕೆಮಾಡಿ.')); return; }
     if (!district) { setError(t('Please select a district.', 'ಜಿಲ್ಲೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ.')); return; }
     if (!dateOccurred) { setError(t('Please select the date of occurrence.', 'ಘಟನೆ ದಿನಾಂಕ ಆಯ್ಕೆಮಾಡಿ.')); return; }
+    if (jurisdictionKm != null && !locationConfirmed) {
+      setError(t('The pinned location looks outside the selected district. Fix the district/station, or tick the confirmation box below the map.',
+                 'ಗುರುತಿಸಿದ ಸ್ಥಳ ಆಯ್ಕೆಮಾಡಿದ ಜಿಲ್ಲೆಯ ಹೊರಗಿದೆ. ಜಿಲ್ಲೆ/ಠಾಣೆ ಸರಿಪಡಿಸಿ ಅಥವಾ ದೃಢೀಕರಣ ಬಾಕ್ಸ್ ಗುರುತಿಸಿ.'));
+      return;
+    }
 
     const validPersons = persons.filter((p) => p.full_name.trim());
     const payload = {
@@ -174,8 +333,12 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
       description: description || null,
       ipc_sections: ipcSections || null,
       investigating_officer: io || null,
+      investigating_officer_rank: ioRank || null,
+      investigating_officer_designation: ioDesignation || null,
       investigation_status: statusVal,
       arrest_made: arrestMade,
+      latitude: lat,
+      longitude: lng,
       persons: validPersons.map((p) => ({
         role: p.role,
         full_name: p.full_name.trim(),
@@ -275,6 +438,74 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
         </Field>
       </div>
 
+      {/* Crime Location — pick the exact spot (not just the district centroid) */}
+      <div style={card}>
+        <h3 style={sectionTitle}>📍 {t('Crime Location', 'ಅಪರಾಧ ಸ್ಥಳ')}</h3>
+        <p style={{ fontSize: 12.5, color: '#78909c', marginTop: -8, marginBottom: 12 }}>
+          {t('Search a landmark, click on the map, or use GPS to mark the exact location. If left blank, the district centre is used.',
+             'ನಿಖರ ಸ್ಥಳ ಗುರುತಿಸಲು ನಕ್ಷೆಯಲ್ಲಿ ಕ್ಲಿಕ್ ಮಾಡಿ, ಹುಡುಕಿ, ಅಥವಾ GPS ಬಳಸಿ. ಖಾಲಿ ಬಿಟ್ಟರೆ ಜಿಲ್ಲಾ ಕೇಂದ್ರ ಬಳಸಲಾಗುತ್ತದೆ.')}
+        </p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
+            <input
+              value={placeQuery}
+              onChange={(e) => onPlaceQueryChange(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); geocode(); } }}
+              placeholder={t('Search landmark / address (e.g. MG Road, near metro)', 'ಸ್ಥಳ / ವಿಳಾಸ ಹುಡುಕಿ')}
+              style={{ ...input, width: '100%' }} />
+            {suggestions.length > 0 && (
+              <ul style={{
+                position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 1000,
+                margin: '2px 0 0', padding: 0, listStyle: 'none', background: '#fff',
+                border: '1px solid #cfd8dc', borderRadius: 6, boxShadow: '0 4px 12px rgba(0,0,0,0.12)',
+                maxHeight: 220, overflowY: 'auto',
+              }}>
+                {suggestions.map((s, i) => (
+                  <li key={i} onClick={() => pickSuggestion(s)}
+                    style={{ padding: '9px 12px', fontSize: 13, cursor: 'pointer', borderBottom: i < suggestions.length - 1 ? '1px solid #eee' : 'none' }}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f5f5')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = '#fff')}>
+                    📍 {s.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button type="button" onClick={geocode} disabled={geocoding} style={{ ...addBtn, opacity: geocoding ? 0.6 : 1 }}>
+            {geocoding ? t('Searching…', 'ಹುಡುಕಲಾಗುತ್ತಿದೆ…') : '🔍 ' + t('Locate', 'ಹುಡುಕಿ')}
+          </button>
+          <button type="button" onClick={useMyLocation} style={resetBtn}>📡 {t('Use GPS', 'GPS ಬಳಸಿ')}</button>
+          {lat != null && (
+            <button type="button" onClick={clearLocation} style={removeBtn}>✕ {t('Clear', 'ತೆರವು')}</button>
+          )}
+        </div>
+        <div ref={mapDivRef} style={{ height: 300, width: '100%', borderRadius: 8, border: '1px solid #cfd8dc', overflow: 'hidden', zIndex: 0 }} />
+        <div style={{ marginTop: 8, fontSize: 13, color: lat != null ? '#2e7d32' : '#90a4ae' }}>
+          {lat != null
+            ? `✅ ${t('Selected', 'ಆಯ್ಕೆ')}: ${lat.toFixed(5)}, ${lng!.toFixed(5)}`
+            : `📌 ${t('No exact location selected — click the map to place a pin.', 'ನಿಖರ ಸ್ಥಳ ಆಯ್ಕೆಯಾಗಿಲ್ಲ — ನಕ್ಷೆಯಲ್ಲಿ ಕ್ಲಿಕ್ ಮಾಡಿ.')}`}
+        </div>
+
+        {/* Jurisdiction mismatch warning (soft — allows a Zero FIR override) */}
+        {jurisdictionKm != null && (
+          <div style={{ marginTop: 10, background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 13, color: '#8d6e00' }}>
+              ⚠️ {t(`This location is about ${jurisdictionKm} km from ${district}.`,
+                    `ಈ ಸ್ಥಳ ${district} ನಿಂದ ಸುಮಾರು ${jurisdictionKm} ಕಿ.ಮೀ ದೂರದಲ್ಲಿದೆ.`)}
+              {' '}
+              {t('It may fall outside this station\'s jurisdiction. Please verify the District / Police Station above — or, if this is a Zero FIR filed outside jurisdiction, confirm below.',
+                 'ಇದು ಈ ಠಾಣೆಯ ವ್ಯಾಪ್ತಿಯ ಹೊರಗಿರಬಹುದು. ಮೇಲಿನ ಜಿಲ್ಲೆ / ಠಾಣೆ ಪರಿಶೀಲಿಸಿ — ಅಥವಾ ಇದು ಝೀರೋ ಎಫ್‌ಐಆರ್ ಆಗಿದ್ದರೆ ಕೆಳಗೆ ದೃಢೀಕರಿಸಿ.')}
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: '#5d4037', cursor: 'pointer' }}>
+              <input type="checkbox" checked={locationConfirmed} onChange={(e) => setLocationConfirmed(e.target.checked)} />
+              {t('I confirm the location is correct (e.g. Zero FIR / cross-jurisdiction).',
+                 'ಸ್ಥಳ ಸರಿಯಾಗಿದೆ ಎಂದು ದೃಢೀಕರಿಸುತ್ತೇನೆ (ಝೀರೋ ಎಫ್‌ಐಆರ್ / ಅಂತರ-ವ್ಯಾಪ್ತಿ).')}
+            </label>
+          </div>
+        )}
+      </div>
+
       {/* Investigation */}
       <div style={card}>
         <h3 style={sectionTitle}>🗂️ {t('Investigation', 'ತನಿಖೆ')}</h3>
@@ -284,6 +515,16 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
           </Field>
           <Field label={t('Investigating Officer', 'ತನಿಖಾಧಿಕಾರಿ')}>
             <input value={io} onChange={(e) => setIo(e.target.value)} style={input} />
+          </Field>
+          <Field label={t('Officer Rank', 'ಅಧಿಕಾರಿ ಹುದ್ದೆ')}>
+            <select value={ioRank} onChange={(e) => setIoRank(e.target.value)} style={input}>
+              {ref.officer_ranks.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          </Field>
+          <Field label={t('Officer Designation', 'ಪದನಾಮ')}>
+            <select value={ioDesignation} onChange={(e) => setIoDesignation(e.target.value)} style={input}>
+              {ref.officer_designations.map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
           </Field>
           <Field label={t('Status', 'ಸ್ಥಿತಿ')}>
             <select value={statusVal} onChange={(e) => setStatusVal(e.target.value)} style={input}>
