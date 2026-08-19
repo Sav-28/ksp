@@ -8,24 +8,39 @@ from sqlalchemy.pool import StaticPool
 import os
 from typing import Generator
 
-# Database URL - can be overridden by environment variable
-# For development, using SQLite for simplicity
-# In production, use PostgreSQL as mentioned in README
+# Database URL — override via environment for production.
+#   dev  : SQLite (default, zero setup)
+#   prod : PostgreSQL — persistent and shared across app instances
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./ksp_crime_ai.db"  # SQLite for development
 )
 
-# For SQLite, we need special settings
+# Managed providers (Heroku, Neon, Supabase, Render) often hand out a
+# "postgres://" URL, which SQLAlchemy 2.x no longer accepts. Normalize it so a
+# copy-pasted connection string works without editing.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 if DATABASE_URL.startswith("sqlite"):
+    # SQLite needs cross-thread access for FastAPI's threadpool.
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
 else:
-    # For PostgreSQL and other databases
-    engine = create_engine(DATABASE_URL)
+    # PostgreSQL / other servers. Managed databases silently close idle
+    # connections, which surfaces as "server closed the connection
+    # unexpectedly" on the next request — pool_pre_ping checks liveness and
+    # pool_recycle retires connections before the provider drops them.
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=int(os.getenv("KSP_DB_POOL_RECYCLE", "280")),
+        pool_size=int(os.getenv("KSP_DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("KSP_DB_MAX_OVERFLOW", "10")),
+    )
 
 # Session maker
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
