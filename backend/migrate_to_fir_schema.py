@@ -105,8 +105,14 @@ def main():
             return
 
         # --- 1. State ------------------------------------------------------
+        # NOTE on insert order: PostgreSQL enforces foreign keys immediately
+        # (SQLite does not by default), so every parent row must be flushed
+        # before the rows that reference it. The explicit db.flush() calls below
+        # make that ordering deterministic instead of relying on the ORM's
+        # dependency sorting.
         db.add(F.State(StateID=KARNATAKA_STATE_ID, StateName="Karnataka",
                        NationalityID=1, Active=True))
+        db.flush()   # State must exist before District / Unit / Court reference it
 
         # --- 2. Lookup masters (categories, gravity, status) ---------------
         for cid, val in [(1, "FIR"), (3, "UDR"), (4, "PAR"), (8, "Zero FIR")]:
@@ -123,6 +129,7 @@ def main():
         for i, s in enumerate(statuses, start=1):
             status_id[s] = i
             db.add(F.CaseStatusMaster(CaseStatusID=i, CaseStatusName=s))
+        db.flush()
 
         # --- 3. Districts + Units (police stations) ------------------------
         district_id = {}
@@ -134,6 +141,7 @@ def main():
         for i, (name, level, hier) in enumerate(UNIT_TYPES, start=1):
             db.add(F.UnitType(UnitTypeID=i, UnitTypeName=name,
                               CityDistState=level, Hierarchy=hier, Active=True))
+        db.flush()   # District + UnitType must exist before Unit rows
 
         unit_id = {}
         units_by_district = {}
@@ -146,6 +154,7 @@ def main():
                           ParentUnit=None, NationalityID=INDIAN_NATIONALITY_ID,
                           StateID=KARNATAKA_STATE_ID,
                           DistrictID=district_id.get(dist), Active=True))
+        db.flush()   # Unit must exist before Employee / CaseMaster reference it
 
         # --- 4. Ranks / Designations / Employees (investigating officers) --
         rank_id = {}
@@ -157,6 +166,7 @@ def main():
             desig_id[name] = i
             db.add(F.Designation(DesignationID=i, DesignationName=name,
                                  Active=True, SortOrder=i))
+        db.flush()   # Rank + Designation must exist before Employee rows
 
         all_district_ids = list(district_id.values()) or [1]
         officers = sorted({
@@ -194,6 +204,7 @@ def main():
         for i, grp in enumerate(heads, start=1):
             head_id[grp] = i
             db.add(F.CrimeHead(CrimeHeadID=i, CrimeGroupName=grp, Active=True))
+        db.flush()   # CrimeHead must exist before CrimeSubHead / CrimeHeadActSection
 
         subhead_id = {}
         for i, (ctype, (ipc, grp)) in enumerate(CRIME_META.items(), start=1):
@@ -203,6 +214,7 @@ def main():
 
         db.add(F.Act(ActCode="IPC", ActDescription="Indian Penal Code",
                      ShortName="IPC", Active=True))
+        db.flush()   # Act must exist before Section / CrimeHeadActSection
         for ctype, (ipc, grp) in CRIME_META.items():
             # Section PK is (ActCode, SectionCode) — guard against dup IPC codes.
             if not db.query(F.Section).get(("IPC", ipc)):
@@ -281,6 +293,9 @@ def main():
                 CaseStatusID=status_id.get(status),
                 CourtID=court_id.get(c.district),
             ))
+            # CaseMaster must exist before the occurrence / people / arrest
+            # rows that reference it (PostgreSQL checks FKs immediately).
+            db.flush()
             # Occurrence window: incident happened over a short span, and the
             # police station was informed shortly after (realistic timeline).
             occ_from = None
@@ -350,7 +365,9 @@ def main():
                 # Link every accused of this case to the arrest event via the
                 # official junction (one arrest event → multiple accused).
                 if accused_objs:
-                    db.flush()  # assign AccusedMasterIDs
+                    # Flush so both the ArrestSurrender row and the Accused rows
+                    # exist before the junction references their ids.
+                    db.flush()
                     for a in accused_objs:
                         db.add(F.inv_arrestsurrenderaccused(
                             ArrestSurrenderID=arrest_counter,
