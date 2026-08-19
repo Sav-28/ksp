@@ -15,6 +15,7 @@ from typing import Dict, Any, List
 import logging
 
 from src.database.session import get_db
+from src.database.dialect import year_month
 from src.api.auth import get_current_user
 
 router = APIRouter()
@@ -78,11 +79,11 @@ async def get_stats(
             ))
         )
 
-        # Monthly trend (SQLite strftime on the date_occurred column)
+        # Monthly trend (dialect-portable date formatting — SQLite/PostgreSQL)
         by_month = _rows_to_label_count(
             db.execute(text(
-                """
-                SELECT strftime('%Y-%m', date_occurred) AS label, COUNT(*) AS count
+                f"""
+                SELECT {year_month('date_occurred')} AS label, COUNT(*) AS count
                 FROM v_crimes
                 WHERE date_occurred IS NOT NULL
                 GROUP BY label

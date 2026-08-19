@@ -36,6 +36,7 @@ from src.api.routes.briefing import router as briefing_router
 from src.api.routes.casework import router as casework_router
 from src.api.routes.crimes import router as crimes_router
 from src.api.routes.anomaly import router as anomaly_router
+from src.api.routes.system import router as system_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -86,10 +87,11 @@ def on_startup():
         logging.warning(f"NLP init warning: {e}")
 
     # Auto-seed on a fresh/empty database (e.g. ephemeral cloud hosts that
-    # don't persist SQLite). Deterministic dataset; runs only when empty.
+    # don't persist SQLite). Deterministic dataset; runs ONLY when empty, so it
+    # can never overwrite real data on a persistent database.
     if os.getenv("KSP_AUTOSEED", "true").lower() != "false":
         try:
-            from src.database.session import SessionLocal
+            from src.database.session import SessionLocal, engine as _eng
             from src.database.models import Crime
             db = SessionLocal()
             empty = db.query(Crime).count() == 0
@@ -98,6 +100,8 @@ def on_startup():
                 logging.info("Empty database detected — seeding narrative dataset...")
                 import generate_narrative_data
                 generate_narrative_data.main()
+            elif not _eng.dialect.name.startswith("sqlite"):
+                logging.info("Persistent database already populated — skipping seed.")
         except Exception as e:
             logging.warning(f"Auto-seed skipped/failed: {e}")
 
@@ -159,6 +163,7 @@ app.include_router(briefing_router, prefix="/api")
 app.include_router(casework_router, prefix="/api")
 app.include_router(crimes_router, prefix="/api")
 app.include_router(anomaly_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
 
 
 @app.get("/health")

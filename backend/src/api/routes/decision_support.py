@@ -21,6 +21,7 @@ from src.database.models import (
 )
 from src.api.auth import get_current_user
 from src.services.crime_detail import get_crime_detail
+from src.database.dialect import year_month
 
 router = APIRouter()
 
@@ -212,8 +213,8 @@ async def forecast(
     """
     # Monthly totals
     rows = db.execute(text(
-        """
-        SELECT strftime('%Y-%m', date_occurred) AS m, COUNT(*) AS c
+        f"""
+        SELECT {year_month('date_occurred')} AS m, COUNT(*) AS c
         FROM v_crimes WHERE date_occurred IS NOT NULL
         GROUP BY m ORDER BY m ASC
         """

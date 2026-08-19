@@ -62,17 +62,23 @@ def _ensure_columns():
     """Lightweight, idempotent migration: add columns introduced after the
     initial schema to an existing database. SQLAlchemy's create_all only
     creates missing *tables*, not missing *columns*, so we add them by hand.
-    Safe to run on every startup — a duplicate-column error is ignored."""
+    Safe to run on every startup — a duplicate-column error is ignored.
+    Uses portable types so it works on SQLite and PostgreSQL alike."""
     from sqlalchemy import text
+    is_pg = engine.dialect.name.startswith("postgres")
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    # PostgreSQL supports IF NOT EXISTS, which avoids relying on error swallowing.
+    guard = "IF NOT EXISTS " if is_pg else ""
     additive = [
         ("crimes", "created_by", "VARCHAR(100)"),
-        ("crimes", "created_at", "DATETIME"),
+        ("crimes", "created_at", ts),
         ("persons", "photo", "TEXT"),
     ]
     for table, column, coltype in additive:
         try:
             with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {guard}{column} {coltype}"))
         except Exception:
             # Column already exists (or table missing) — nothing to do.
             pass
@@ -84,21 +90,21 @@ def _ensure_columns():
 # query: readers select FROM v_crimes instead of the old crimes table.
 _V_CRIMES_SQL = """
 CREATE VIEW v_crimes AS
-SELECT cm.CaseMasterID          AS id,
-       cm.CrimeNo               AS fir_number,
-       cm.CrimeRegisteredDate   AS date_occurred,
-       d.DistrictName           AS district,
-       d.DistrictName           AS taluk,
-       u.UnitName               AS police_station,
-       sh.CrimeHeadName         AS crime_type,
-       io.BriefFacts            AS description,
-       io.latitude              AS latitude,
-       io.longitude             AS longitude
-FROM CaseMaster cm
-LEFT JOIN CrimeSubHead sh     ON sh.CrimeSubHeadID = cm.CrimeMinorHeadID
-LEFT JOIN Unit u              ON u.UnitID          = cm.PoliceStationID
-LEFT JOIN District d          ON d.DistrictID      = u.DistrictID
-LEFT JOIN Inv_OccuranceTime io ON io.CaseMasterID  = cm.CaseMasterID
+SELECT cm."CaseMasterID"          AS id,
+       cm."CrimeNo"               AS fir_number,
+       cm."CrimeRegisteredDate"   AS date_occurred,
+       d."DistrictName"           AS district,
+       d."DistrictName"           AS taluk,
+       u."UnitName"               AS police_station,
+       sh."CrimeHeadName"         AS crime_type,
+       io."BriefFacts"            AS description,
+       io.latitude                AS latitude,
+       io.longitude               AS longitude
+FROM "CaseMaster" cm
+LEFT JOIN "CrimeSubHead" sh      ON sh."CrimeSubHeadID" = cm."CrimeMinorHeadID"
+LEFT JOIN "Unit" u               ON u."UnitID"          = cm."PoliceStationID"
+LEFT JOIN "District" d           ON d."DistrictID"      = u."DistrictID"
+LEFT JOIN "Inv_OccuranceTime" io ON io."CaseMasterID"   = cm."CaseMasterID"
 """
 
 

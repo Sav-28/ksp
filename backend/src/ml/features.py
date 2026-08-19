@@ -50,10 +50,11 @@ def build_training_data(db: Session, current_year: int) -> Tuple[List[List[float
     once. y = 1 if the person is accused in 2+ cases (repeat offender).
     """
     # Per-person aggregates from their accused cases (one query).
+    from src.database.dialect import year as _year
     rows = db.execute(text(
-        """
+        f"""
         SELECT cp.person_id AS pid, c.crime_type AS ct,
-               strftime('%Y', c.date_occurred) AS yr
+               {_year('c.date_occurred')} AS yr
         FROM case_persons cp
         JOIN crimes c ON c.id = cp.crime_id
         WHERE cp.role = 'accused'

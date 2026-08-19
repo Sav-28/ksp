@@ -52,11 +52,13 @@ class QueryTranslator:
         if intent not in ["SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES"]:
             raise ValueError(f"Unsupported intent: {intent}")
 
-        # Map group_by dimension to a SQL column / expression
+        # Map group_by dimension to a SQL column / expression. The month
+        # expression is dialect-portable (SQLite / PostgreSQL).
+        from src.database.dialect import year_month
         group_by_map = {
             "district": "district",
             "crime_type": "crime_type",
-            "month": "strftime('%Y-%m', date_occurred)"
+            "month": year_month("date_occurred"),
         }
 
         # Build base query. Reads go through v_crimes — the compatibility view
