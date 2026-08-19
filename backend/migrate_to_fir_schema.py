@@ -99,7 +99,11 @@ def main():
         print("Clearing existing official FIR tables...")
         _clear_official(db)
 
-        crimes = db.query(Crime).all()
+        # ORDER BY is essential: without it PostgreSQL gives no row-order
+        # guarantee, so the per-station CrimeNo serials (and therefore the
+        # generated CrimeNos) would differ between runs — making the projection
+        # non-reproducible and prone to unique-key collisions on re-run.
+        crimes = db.query(Crime).order_by(Crime.id).all()
         if not crimes:
             print("No source crimes found — run the analytics seeder first. Aborting.")
             return
@@ -288,6 +292,15 @@ def main():
         cs_counter = 0
         arrest_counter = 0
         plan = []  # per-case values computed once and reused across passes
+
+        # crimes.fir_number is UNIQUE and this projection rewrites it to the
+        # official CrimeNo. Reassigning in bulk can transiently collide with a
+        # number still held by a DIFFERENT row (e.g. after an interrupted run
+        # left some rows already renumbered). Parking every row on a temporary
+        # unique value first makes the reassignment safe from any prior state.
+        for c in crimes:
+            c.fir_number = f"TMP-{c.id}"
+        db.flush()
 
         # Pass 1 — parents only: CaseMaster (CaseMasterID is aligned to the
         # analytics crime.id so both layers share one id space).
