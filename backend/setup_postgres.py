@@ -74,15 +74,22 @@ def main():
         import generate_narrative_data
         generate_narrative_data.main()
 
-    # 4. Project into the official FIR schema.
+    # 4. Project into the official FIR schema. Rebuild if the projection is
+    #    missing OR incomplete (e.g. a previous run was interrupted), otherwise
+    #    the app would serve a partially-populated system of record.
     from src.database.models_fir import CaseMaster
     db = SessionLocal()
     have_official = db.query(CaseMaster).count()
+    total_crimes = db.query(Crime).count()
     db.close()
-    if have_official:
-        print(f"Official schema already populated ({have_official} cases).")
+    if have_official == total_crimes and have_official > 0:
+        print(f"Official schema already complete ({have_official} cases).")
     else:
-        print("Projecting into the official FIR schema...")
+        if have_official:
+            print(f"Official schema INCOMPLETE ({have_official}/{total_crimes} cases) "
+                  f"— rebuilding...")
+        else:
+            print("Projecting into the official FIR schema...")
         import migrate_to_fir_schema
         migrate_to_fir_schema.main()
 

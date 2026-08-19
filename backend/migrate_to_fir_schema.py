@@ -104,6 +104,21 @@ def main():
             print("No source crimes found — run the analytics seeder first. Aborting.")
             return
 
+        # --- Bulk preload -------------------------------------------------
+        # Everything below used to be looked up per crime (an N+1 pattern).
+        # That is free on local SQLite but catastrophic against a remote
+        # PostgreSQL: ~7,000 round trips at ~250 ms each. Load it all in three
+        # queries and work from dictionaries instead.
+        print("Preloading source data...")
+        fir_by_crime = {f.crime_id: f for f in db.query(FIRDetails).all()}
+        links_by_crime = {}
+        for link in db.query(CasePerson).all():
+            links_by_crime.setdefault(link.crime_id, []).append(link)
+        person_by_id = {p.id: p for p in db.query(Person).all()}
+        print(f"  {len(fir_by_crime)} FIR details · "
+              f"{sum(len(v) for v in links_by_crime.values())} case links · "
+              f"{len(person_by_id)} persons")
+
         # --- 1. State ------------------------------------------------------
         # NOTE on insert order: PostgreSQL enforces foreign keys immediately
         # (SQLite does not by default), so every parent row must be flushed
@@ -121,8 +136,7 @@ def main():
         db.add(F.GravityOffence(GravityOffenceID=2, LookupValue="Non-Heinous"))
 
         statuses = sorted({
-            (db.query(FIRDetails).filter(FIRDetails.crime_id == c.id).first()
-             or FIRDetails()).investigation_status or "Registered"
+            (fir_by_crime.get(c.id) or FIRDetails()).investigation_status or "Registered"
             for c in crimes
         })
         status_id = {}
@@ -256,14 +270,30 @@ def main():
         db.commit()
 
         # --- 8. CaseMaster + occurrence + people + arrests + chargesheets --
+        # Done in BATCHED PASSES rather than per case. Two reasons:
+        #  1. Correctness — PostgreSQL enforces FKs immediately, so all parent
+        #     CaseMaster rows must be flushed before any row that references them.
+        #  2. Speed — on a managed/remote database every query and flush is a
+        #     network round-trip. The previous per-case pattern issued ~3 queries
+        #     plus a flush for each of ~900 cases (thousands of round-trips, and
+        #     minutes of latency). Bulk-loading + 3 flushes reduces that to a
+        #     handful.
+        fir_by_crime = {f.crime_id: f for f in db.query(FIRDetails).all()}
+        links_by_crime = {}
+        for _link in db.query(CasePerson).all():
+            links_by_crime.setdefault(_link.crime_id, []).append(_link)
+        person_by_id = {p.id: p for p in db.query(Person).all()}
+
         serial_by_ps = {}
         cs_counter = 0
         arrest_counter = 0
-        # CaseMasterID is aligned to the analytics crime.id so the official
-        # schema and the intelligence layer share one id space (clean bridge).
+        plan = []  # per-case values computed once and reused across passes
+
+        # Pass 1 — parents only: CaseMaster (CaseMasterID is aligned to the
+        # analytics crime.id so both layers share one id space).
         for c in crimes:
             cm_id = c.id
-            fir = db.query(FIRDetails).filter(FIRDetails.crime_id == c.id).first()
+            fir = fir_by_crime.get(c.id)
             year = c.date_occurred.year if c.date_occurred else 2026
             uid = unit_id.get((c.district, c.police_station), 0)
             did = district_id.get(c.district, 0)
@@ -274,6 +304,7 @@ def main():
             crime_no = f"{CASE_CATEGORY_CODE['FIR']}{did:04d}{uid:04d}{year:04d}{serial:05d}"
             case_no = crime_no[-9:]
             status = (fir.investigation_status if fir else None) or "Registered"
+            officer = (fir.investigating_officer if fir else None) or "Unassigned"
 
             # Unify identifiers: the analytics crime now carries the OFFICIAL
             # CrimeNo as its fir_number, so every ORM read / lookup / detail view
@@ -283,8 +314,7 @@ def main():
             db.add(F.CaseMaster(
                 CaseMasterID=cm_id, CrimeNo=crime_no, CaseNo=case_no,
                 CrimeRegisteredDate=c.date_occurred,
-                PolicePersonID=employee_id.get(
-                    (fir.investigating_officer if fir else None) or "Unassigned"),
+                PolicePersonID=employee_id.get(officer),
                 PoliceStationID=uid or None,
                 CaseCategoryID=1,
                 GravityOffenceID=1 if c.crime_type in HEINOUS else 2,
@@ -293,14 +323,15 @@ def main():
                 CaseStatusID=status_id.get(status),
                 CourtID=court_id.get(c.district),
             ))
-            # CaseMaster must exist before the occurrence / people / arrest
-            # rows that reference it (PostgreSQL checks FKs immediately).
-            db.flush()
-            # Occurrence window: incident happened over a short span, and the
-            # police station was informed shortly after (realistic timeline).
-            occ_from = None
-            occ_to = None
-            info_recv = None
+            plan.append({"c": c, "cm_id": cm_id, "fir": fir, "did": did,
+                         "uid": uid, "status": status, "officer": officer,
+                         "accused": []})
+        db.flush()   # every CaseMaster now exists — children may reference it
+
+        # Pass 2 — occurrence window, people, and act/section rows.
+        for item in plan:
+            c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
+            occ_from = occ_to = info_recv = None
             if c.date_occurred:
                 occ_from = datetime.combine(c.date_occurred, datetime.min.time()) + \
                     timedelta(hours=random.randint(0, 22), minutes=random.choice([0, 15, 30, 45]))
@@ -313,12 +344,9 @@ def main():
                 latitude=c.latitude, longitude=c.longitude, BriefFacts=c.description,
             ))
 
-            # People linked to this case, by role
-            links = db.query(CasePerson).filter(CasePerson.crime_id == c.id).all()
             acc_seq = 0
-            accused_objs = []
-            for link in links:
-                p = db.query(Person).get(link.person_id)
+            for link in links_by_crime.get(c.id, []):
+                p = person_by_id.get(link.person_id)
                 if not p:
                     continue
                 gid = GENDER_ID.get(p.gender, 1)
@@ -327,7 +355,7 @@ def main():
                     a = F.Accused(CaseMasterID=cm_id, AccusedName=p.full_name,
                                   AgeYear=p.age, GenderID=gid, PersonID=f"A{acc_seq}")
                     db.add(a)
-                    accused_objs.append(a)
+                    item["accused"].append(a)
                 elif link.role == "victim":
                     db.add(F.Victim(CaseMasterID=cm_id, VictimName=p.full_name,
                                     AgeYear=p.age, GenderID=gid,
@@ -347,8 +375,12 @@ def main():
                     db.add(F.ActSectionAssociation(
                         CaseMasterID=cm_id, ActID="IPC", SectionID=sec,
                         ActOrderID=1, SectionOrderID=order))
+        db.flush()   # assigns AccusedMasterIDs used by the arrest junction
 
-            # Arrest + chargesheet where applicable
+        # Pass 3 — arrest / surrender events and chargesheets.
+        arrest_links = []
+        for item in plan:
+            c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
             if fir and fir.arrest_made:
                 arrest_counter += 1
                 # Roughly 1 in 8 events is a voluntary surrender, else an arrest.
@@ -358,31 +390,28 @@ def main():
                     ArrestSurrenderTypeID=as_type,
                     ArrestSurrenderDate=fir.filed_date or c.date_occurred,
                     ArrestSurrenderStateId=KARNATAKA_STATE_ID,
-                    ArrestSurrenderDistrictId=did or None, PoliceStationID=uid or None,
-                    IOID=employee_id.get((fir.investigating_officer or "Unassigned")),
+                    ArrestSurrenderDistrictId=item["did"] or None,
+                    PoliceStationID=item["uid"] or None,
+                    IOID=employee_id.get(item["officer"]),
                     CourtID=court_id.get(c.district), IsAccused=True,
                     IsComplainantAccused=False))
-                # Link every accused of this case to the arrest event via the
-                # official junction (one arrest event → multiple accused).
-                if accused_objs:
-                    # Flush so both the ArrestSurrender row and the Accused rows
-                    # exist before the junction references their ids.
-                    db.flush()
-                    for a in accused_objs:
-                        db.add(F.inv_arrestsurrenderaccused(
-                            ArrestSurrenderID=arrest_counter,
-                            AccusedMasterID=a.AccusedMasterID))
-            if fir and status in CS_TYPE:
+                # Remember the junction rows; they need ArrestSurrender flushed.
+                for a in item["accused"]:
+                    arrest_links.append((arrest_counter, a))
+            if fir and item["status"] in CS_TYPE:
                 cs_counter += 1
                 db.add(F.ChargesheetDetails(
                     CSID=cs_counter, CaseMasterID=cm_id,
                     csdate=datetime.combine(fir.closed_date or c.date_occurred, datetime.min.time())
                     if (fir.closed_date or c.date_occurred) else None,
-                    cstype=CS_TYPE[status],
-                    PolicePersonID=employee_id.get((fir.investigating_officer or "Unassigned"))))
+                    cstype=CS_TYPE[item["status"]],
+                    PolicePersonID=employee_id.get(item["officer"])))
+        db.flush()   # ArrestSurrender rows now exist
 
-            if cm_id % 200 == 0:
-                db.commit()
+        # Pass 4 — the arrest/accused junction (needs both parents present).
+        for as_id, a in arrest_links:
+            db.add(F.inv_arrestsurrenderaccused(
+                ArrestSurrenderID=as_id, AccusedMasterID=a.AccusedMasterID))
         db.commit()
 
         # --- Summary -------------------------------------------------------
