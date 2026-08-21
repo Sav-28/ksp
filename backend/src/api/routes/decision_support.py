@@ -22,6 +22,7 @@ from src.database.models import (
 from src.api.auth import get_current_user
 from src.services.crime_detail import get_crime_detail
 from src.database.dialect import year_month
+from src.ml.forecast_model import backtest, forecast_next, split_complete_months
 
 router = APIRouter()
 
@@ -221,13 +222,17 @@ async def forecast(
     )).fetchall()
     monthly = [{"month": r._mapping["m"], "count": r._mapping["c"]} for r in rows]
 
-    # Forecast next month via a 3-month moving average + simple trend
-    forecast_value = None
-    if len(monthly) >= 3:
-        last3 = [m["count"] for m in monthly[-3:]]
-        avg = sum(last3) / 3
-        trend = (last3[-1] - last3[0]) / 2  # slope over the window
-        forecast_value = max(0, round(avg + trend))
+    # Forecast the next month using the model selected by walk-forward
+    # backtesting, and report its measured error (see src/ml/forecast_model.py).
+    # The current calendar month is still accumulating records, so it is excluded
+    # from training/evaluation — otherwise the partial count drags the trend down.
+    current_month = date.today().strftime("%Y-%m")
+    complete, partial = split_complete_months(monthly, current_month)
+    series = [m["count"] for m in complete]
+
+    backtest_result = backtest(series)
+    chosen = backtest_result.get("method") if backtest_result.get("available") else None
+    forecast_value = forecast_next(series, chosen)
 
     # Early-warning alerts: districts with rising recent activity
     today = date.today()
@@ -266,4 +271,17 @@ async def forecast(
         "next_month_forecast": forecast_value,
         "alerts": alerts[:8],
         "alert_count": len(alerts),
+        # Explainable AI: the forecast now carries its own accuracy, measured by
+        # walk-forward backtesting, plus the naive baseline it beats.
+        "model": {
+            "name": backtest_result.get("method"),
+            "validation": backtest_result.get("validation"),
+            "metrics": backtest_result.get("metrics"),
+            "baseline": backtest_result.get("baseline"),
+            "improvement_over_baseline_pct": backtest_result.get("improvement_over_baseline_pct"),
+            "evaluated_months": backtest_result.get("evaluated_months"),
+            "available": backtest_result.get("available", False),
+            "reason": backtest_result.get("reason"),
+            "excluded_partial_month": partial["month"] if partial else None,
+        },
     }

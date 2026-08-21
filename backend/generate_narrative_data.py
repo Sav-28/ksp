@@ -241,10 +241,23 @@ def rel(db, a, b, rtype, crime=None, strength=0.8):
 
 
 def weighted_past_date(days_back=730, recent_bias=0.35):
-    """Random past date; recent_bias fraction land in the last 90 days."""
+    """Random past date with a mild, SMOOTH upward trend toward the present.
+
+    This previously pushed `recent_bias` (35%) of ALL records into the last 90
+    days, which put roughly 3x the normal monthly volume into the final quarter —
+    a cliff rather than a trend. That single artefact made the dashboard trend
+    chart look broken, defeated forecasting (no model could beat "same as last
+    month"), and caused anomaly detection to flag every recent month.
+
+    A triangular distribution peaked at the present produces a gentle ramp
+    instead: recent months are modestly busier, and the deliberately planted
+    narratives (gang surge, festival spike) remain the genuinely notable signals.
+    """
     if random.random() < recent_bias:
-        return TODAY - timedelta(days=random.randint(0, 90))
-    return TODAY - timedelta(days=random.randint(0, days_back))
+        days = int(random.triangular(0, days_back, 0))
+    else:
+        days = random.randint(0, days_back)
+    return TODAY - timedelta(days=days)
 
 
 def generate_background(db, persons, n=820):
