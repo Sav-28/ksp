@@ -21,7 +21,7 @@
     5.065974,
     5.75947,
     0.706439,
-    0.929924
+    0.935606
   ],
   "std": [
     15.074817,
@@ -32,20 +32,20 @@
     1.710436,
     2.149019,
     0.455393,
-    0.255275
+    0.245453
   ],
   "coef": [
-    -0.003428,
-    0.048413,
-    0.146328,
-    0.058747,
-    0.360893,
-    -4.814808,
-    5.928355,
-    -0.016802,
-    0.96064
+    -0.003081,
+    0.049701,
+    0.15163,
+    0.053894,
+    0.363229,
+    -4.82704,
+    5.943367,
+    -0.021977,
+    0.923379
   ],
-  "intercept": 0.459821,
+  "intercept": 0.476061,
   "n_samples": 661,
   "test_size": 133,
   "repeat_rate": 0.442,
@@ -54,41 +54,41 @@
   "feature_importances": [
     {
       "feature": "max_severity",
-      "importance": 5.9284
+      "importance": 5.9434
     },
     {
       "feature": "avg_severity",
-      "importance": 4.8148
+      "importance": 4.827
     },
     {
       "feature": "recent_activity",
-      "importance": 0.9606
+      "importance": 0.9234
     },
     {
       "feature": "gang_member",
-      "importance": 0.3609
+      "importance": 0.3632
     },
     {
       "feature": "ses_rank",
-      "importance": 0.1463
+      "importance": 0.1516
     },
     {
       "feature": "edu_rank",
-      "importance": 0.0587
+      "importance": 0.0539
     },
     {
       "feature": "is_male",
-      "importance": 0.0484
+      "importance": 0.0497
     },
     {
       "feature": "urban",
-      "importance": 0.0168
+      "importance": 0.022
     },
     {
       "feature": "age",
-      "importance": 0.0034
+      "importance": 0.0031
     }
   ],
   "trained_on": "synthetic seeded dataset",
-  "trained_at": "2026-07-24"
+  "trained_at": "2026-08-20"
 }
