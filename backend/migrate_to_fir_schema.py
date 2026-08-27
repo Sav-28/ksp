@@ -291,7 +291,6 @@ def main():
         serial_by_ps = {}
         cs_counter = 0
         arrest_counter = 0
-        plan = []  # per-case values computed once and reused across passes
 
         # crimes.fir_number is UNIQUE and this projection rewrites it to the
         # official CrimeNo. Reassigning in bulk can transiently collide with a
@@ -300,132 +299,154 @@ def main():
         # unique value first makes the reassignment safe from any prior state.
         for c in crimes:
             c.fir_number = f"TMP-{c.id}"
-        db.flush()
+        db.commit()
 
-        # Pass 1 — parents only: CaseMaster (CaseMasterID is aligned to the
-        # analytics crime.id so both layers share one id space).
+        # Compute every case's derived values up front (pure computation, no I/O)
+        # so the write phase can be chunked freely.
+        plan = []
         for c in crimes:
-            cm_id = c.id
             fir = fir_by_crime.get(c.id)
             year = c.date_occurred.year if c.date_occurred else 2026
             uid = unit_id.get((c.district, c.police_station), 0)
             did = district_id.get(c.district, 0)
             key = (uid, year)
             serial_by_ps[key] = serial_by_ps.get(key, 0) + 1
-            serial = serial_by_ps[key]
             # CrimeNo = 1(cat) + 4(district) + 4(unit) + 4(year) + 5(serial)
-            crime_no = f"{CASE_CATEGORY_CODE['FIR']}{did:04d}{uid:04d}{year:04d}{serial:05d}"
-            case_no = crime_no[-9:]
-            status = (fir.investigation_status if fir else None) or "Registered"
-            officer = (fir.investigating_officer if fir else None) or "Unassigned"
+            crime_no = (f"{CASE_CATEGORY_CODE['FIR']}{did:04d}{uid:04d}"
+                        f"{year:04d}{serial_by_ps[key]:05d}")
+            plan.append({
+                "c": c, "cm_id": c.id, "fir": fir, "did": did, "uid": uid,
+                "crime_no": crime_no, "case_no": crime_no[-9:],
+                "status": (fir.investigation_status if fir else None) or "Registered",
+                "officer": (fir.investigating_officer if fir else None) or "Unassigned",
+                "accused": [],
+            })
 
-            # Unify identifiers: the analytics crime now carries the OFFICIAL
-            # CrimeNo as its fir_number, so every ORM read / lookup / detail view
-            # and the compatibility view all expose the same official number.
-            c.fir_number = crime_no
+        # Write in CHUNKS, committing each one. Two reasons:
+        #  - FK ordering: within a chunk, parents are flushed before children.
+        #  - Resilience: managed/serverless PostgreSQL (e.g. Neon) drops long
+        #    idle-ish transactions ("server closed the connection unexpectedly"),
+        #    so one giant transaction for ~900 cases is fragile. Short chunked
+        #    transactions survive that and make progress restartable.
+        CHUNK = 100
+        for start in range(0, len(plan), CHUNK):
+            batch = plan[start:start + CHUNK]
 
-            db.add(F.CaseMaster(
-                CaseMasterID=cm_id, CrimeNo=crime_no, CaseNo=case_no,
-                CrimeRegisteredDate=c.date_occurred,
-                PolicePersonID=employee_id.get(officer),
-                PoliceStationID=uid or None,
-                CaseCategoryID=1,
-                GravityOffenceID=1 if c.crime_type in HEINOUS else 2,
-                CrimeMajorHeadID=head_id.get(CRIME_META.get(c.crime_type, (None, None))[1]),
-                CrimeMinorHeadID=subhead_id.get(c.crime_type),
-                CaseStatusID=status_id.get(status),
-                CourtID=court_id.get(c.district),
-            ))
-            plan.append({"c": c, "cm_id": cm_id, "fir": fir, "did": did,
-                         "uid": uid, "status": status, "officer": officer,
-                         "accused": []})
-        db.flush()   # every CaseMaster now exists — children may reference it
-
-        # Pass 2 — occurrence window, people, and act/section rows.
-        for item in plan:
-            c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
-            occ_from = occ_to = info_recv = None
-            if c.date_occurred:
-                occ_from = datetime.combine(c.date_occurred, datetime.min.time()) + \
-                    timedelta(hours=random.randint(0, 22), minutes=random.choice([0, 15, 30, 45]))
-                occ_to = occ_from + timedelta(minutes=random.randint(15, 240))
-                info_recv = occ_to + timedelta(hours=random.randint(1, 72))
-            db.add(F.Inv_OccuranceTime(
-                CaseMasterID=cm_id,
-                IncidentFromDate=occ_from, IncidentToDate=occ_to,
-                InfoReceivedPSDate=info_recv,
-                latitude=c.latitude, longitude=c.longitude, BriefFacts=c.description,
-            ))
-
-            acc_seq = 0
-            for link in links_by_crime.get(c.id, []):
-                p = person_by_id.get(link.person_id)
-                if not p:
-                    continue
-                gid = GENDER_ID.get(p.gender, 1)
-                if link.role == "accused":
-                    acc_seq += 1
-                    a = F.Accused(CaseMasterID=cm_id, AccusedName=p.full_name,
-                                  AgeYear=p.age, GenderID=gid, PersonID=f"A{acc_seq}")
-                    db.add(a)
-                    item["accused"].append(a)
-                elif link.role == "victim":
-                    db.add(F.Victim(CaseMasterID=cm_id, VictimName=p.full_name,
-                                    AgeYear=p.age, GenderID=gid,
-                                    VictimPolice="1" if random.random() < 0.03 else "0"))
-                elif link.role in ("complainant", "witness"):
-                    db.add(F.ComplainantDetails(
-                        CaseMasterID=cm_id, ComplainantName=p.full_name, AgeYear=p.age,
-                        OccupationID=occ_id.get(p.occupation),
-                        ReligionID=random.choices(religion_ids, weights=RELIGION_WEIGHTS)[0],
-                        CasteID=random.choices(caste_ids, weights=CASTE_WEIGHTS)[0],
-                        GenderID=gid))
-
-            # Act-section association from FIRDetails.ipc_sections
-            if fir and fir.ipc_sections:
-                for order, sec in enumerate(
-                        [s.strip() for s in fir.ipc_sections.split(",") if s.strip()], start=1):
-                    db.add(F.ActSectionAssociation(
-                        CaseMasterID=cm_id, ActID="IPC", SectionID=sec,
-                        ActOrderID=1, SectionOrderID=order))
-        db.flush()   # assigns AccusedMasterIDs used by the arrest junction
-
-        # Pass 3 — arrest / surrender events and chargesheets.
-        arrest_links = []
-        for item in plan:
-            c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
-            if fir and fir.arrest_made:
-                arrest_counter += 1
-                # Roughly 1 in 8 events is a voluntary surrender, else an arrest.
-                as_type = 2 if random.random() < 0.12 else 1
-                db.add(F.ArrestSurrender(
-                    ArrestSurrenderID=arrest_counter, CaseMasterID=cm_id,
-                    ArrestSurrenderTypeID=as_type,
-                    ArrestSurrenderDate=fir.filed_date or c.date_occurred,
-                    ArrestSurrenderStateId=KARNATAKA_STATE_ID,
-                    ArrestSurrenderDistrictId=item["did"] or None,
+            # Step 1 — parents: CaseMaster (CaseMasterID is aligned to the
+            # analytics crime.id so both layers share one id space).
+            for item in batch:
+                c = item["c"]
+                # Unify identifiers: the analytics crime now carries the OFFICIAL
+                # CrimeNo, so every ORM read / lookup / detail view and the
+                # compatibility view expose the same official number.
+                c.fir_number = item["crime_no"]
+                db.add(F.CaseMaster(
+                    CaseMasterID=item["cm_id"], CrimeNo=item["crime_no"],
+                    CaseNo=item["case_no"],
+                    CrimeRegisteredDate=c.date_occurred,
+                    PolicePersonID=employee_id.get(item["officer"]),
                     PoliceStationID=item["uid"] or None,
-                    IOID=employee_id.get(item["officer"]),
-                    CourtID=court_id.get(c.district), IsAccused=True,
-                    IsComplainantAccused=False))
-                # Remember the junction rows; they need ArrestSurrender flushed.
-                for a in item["accused"]:
-                    arrest_links.append((arrest_counter, a))
-            if fir and item["status"] in CS_TYPE:
-                cs_counter += 1
-                db.add(F.ChargesheetDetails(
-                    CSID=cs_counter, CaseMasterID=cm_id,
-                    csdate=datetime.combine(fir.closed_date or c.date_occurred, datetime.min.time())
-                    if (fir.closed_date or c.date_occurred) else None,
-                    cstype=CS_TYPE[item["status"]],
-                    PolicePersonID=employee_id.get(item["officer"])))
-        db.flush()   # ArrestSurrender rows now exist
+                    CaseCategoryID=1,
+                    GravityOffenceID=1 if c.crime_type in HEINOUS else 2,
+                    CrimeMajorHeadID=head_id.get(
+                        CRIME_META.get(c.crime_type, (None, None))[1]),
+                    CrimeMinorHeadID=subhead_id.get(c.crime_type),
+                    CaseStatusID=status_id.get(item["status"]),
+                    CourtID=court_id.get(c.district),
+                ))
+            db.flush()   # CaseMaster rows exist — children may reference them
 
-        # Pass 4 — the arrest/accused junction (needs both parents present).
-        for as_id, a in arrest_links:
-            db.add(F.inv_arrestsurrenderaccused(
-                ArrestSurrenderID=as_id, AccusedMasterID=a.AccusedMasterID))
-        db.commit()
+            # Step 2 — occurrence window, people, and act/section rows.
+            for item in batch:
+                c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
+                occ_from = occ_to = info_recv = None
+                if c.date_occurred:
+                    occ_from = datetime.combine(c.date_occurred, datetime.min.time()) + \
+                        timedelta(hours=random.randint(0, 22),
+                                  minutes=random.choice([0, 15, 30, 45]))
+                    occ_to = occ_from + timedelta(minutes=random.randint(15, 240))
+                    info_recv = occ_to + timedelta(hours=random.randint(1, 72))
+                db.add(F.Inv_OccuranceTime(
+                    CaseMasterID=cm_id,
+                    IncidentFromDate=occ_from, IncidentToDate=occ_to,
+                    InfoReceivedPSDate=info_recv,
+                    latitude=c.latitude, longitude=c.longitude,
+                    BriefFacts=c.description,
+                ))
+
+                acc_seq = 0
+                for link in links_by_crime.get(c.id, []):
+                    p = person_by_id.get(link.person_id)
+                    if not p:
+                        continue
+                    gid = GENDER_ID.get(p.gender, 1)
+                    if link.role == "accused":
+                        acc_seq += 1
+                        a = F.Accused(CaseMasterID=cm_id, AccusedName=p.full_name,
+                                      AgeYear=p.age, GenderID=gid,
+                                      PersonID=f"A{acc_seq}")
+                        db.add(a)
+                        item["accused"].append(a)
+                    elif link.role == "victim":
+                        db.add(F.Victim(CaseMasterID=cm_id, VictimName=p.full_name,
+                                        AgeYear=p.age, GenderID=gid,
+                                        VictimPolice="1" if random.random() < 0.03 else "0"))
+                    elif link.role in ("complainant", "witness"):
+                        db.add(F.ComplainantDetails(
+                            CaseMasterID=cm_id, ComplainantName=p.full_name,
+                            AgeYear=p.age,
+                            OccupationID=occ_id.get(p.occupation),
+                            ReligionID=random.choices(religion_ids, weights=RELIGION_WEIGHTS)[0],
+                            CasteID=random.choices(caste_ids, weights=CASTE_WEIGHTS)[0],
+                            GenderID=gid))
+
+                # Act-section association from FIRDetails.ipc_sections
+                if fir and fir.ipc_sections:
+                    for order, sec in enumerate(
+                            [s.strip() for s in fir.ipc_sections.split(",") if s.strip()],
+                            start=1):
+                        db.add(F.ActSectionAssociation(
+                            CaseMasterID=cm_id, ActID="IPC", SectionID=sec,
+                            ActOrderID=1, SectionOrderID=order))
+            db.flush()   # assigns AccusedMasterIDs used by the arrest junction
+
+            # Step 3 — arrest / surrender events and chargesheets.
+            arrest_links = []
+            for item in batch:
+                c, cm_id, fir = item["c"], item["cm_id"], item["fir"]
+                if fir and fir.arrest_made:
+                    arrest_counter += 1
+                    # Roughly 1 in 8 events is a voluntary surrender, else arrest.
+                    as_type = 2 if random.random() < 0.12 else 1
+                    db.add(F.ArrestSurrender(
+                        ArrestSurrenderID=arrest_counter, CaseMasterID=cm_id,
+                        ArrestSurrenderTypeID=as_type,
+                        ArrestSurrenderDate=fir.filed_date or c.date_occurred,
+                        ArrestSurrenderStateId=KARNATAKA_STATE_ID,
+                        ArrestSurrenderDistrictId=item["did"] or None,
+                        PoliceStationID=item["uid"] or None,
+                        IOID=employee_id.get(item["officer"]),
+                        CourtID=court_id.get(c.district), IsAccused=True,
+                        IsComplainantAccused=False))
+                    for a in item["accused"]:
+                        arrest_links.append((arrest_counter, a))
+                if fir and item["status"] in CS_TYPE:
+                    cs_counter += 1
+                    db.add(F.ChargesheetDetails(
+                        CSID=cs_counter, CaseMasterID=cm_id,
+                        csdate=datetime.combine(fir.closed_date or c.date_occurred,
+                                                datetime.min.time())
+                        if (fir.closed_date or c.date_occurred) else None,
+                        cstype=CS_TYPE[item["status"]],
+                        PolicePersonID=employee_id.get(item["officer"])))
+            db.flush()   # ArrestSurrender rows now exist
+
+            # Step 4 — the arrest/accused junction (needs both parents present).
+            for as_id, a in arrest_links:
+                db.add(F.inv_arrestsurrenderaccused(
+                    ArrestSurrenderID=as_id, AccusedMasterID=a.AccusedMasterID))
+            db.commit()
+            print(f"  projected {min(start + CHUNK, len(plan))}/{len(plan)} cases")
 
         # --- Summary -------------------------------------------------------
         print("=" * 60)
