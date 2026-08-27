@@ -1,0 +1,72 @@
+{
+  "_README": [
+    "Reference distributions used to shape the seeded demo dataset.",
+    "",
+    "WHY THIS FILE EXISTS: these weights used to be magic numbers inline in",
+    "generate_narrative_data.py with a comment claiming they were",
+    "'population-weighted'. They were not derived from any source. Pulling them",
+    "out here makes the provenance of every number explicit and auditable, and",
+    "means replacing them with officially published figures is a DATA edit rather",
+    "than a code change.",
+    "",
+    "HONESTY RULE: every entry carries a 'basis' and a 'source'. Do not change a",
+    "number without updating both. 'illustrative' means the value was chosen to",
+    "look plausible and is NOT sourced - it must never be described as official.",
+    "",
+    "TO CALIBRATE AGAINST REAL DATA: replace the values, set basis to e.g.",
+    "'ncrb_crime_in_india_2022_table_3A', set source to the exact table and URL,",
+    "and set calibrated to true. The loader validates shape only, so any",
+    "consistent set of positive weights works."
+  ],
+
+  "_provenance": {
+    "calibrated": false,
+    "last_reviewed": "2026-08-27",
+    "summary": "District and crime-type mixes are ILLUSTRATIVE, not sourced from published crime statistics. They are shaped to be broadly plausible (property crime common, homicide rare; larger urban districts carry more volume) so the analytics demonstrate real behaviour, but no figure here should be presented as an official statistic.",
+    "known_gaps": [
+      "District-level Karnataka crime counts are not available as a clean machine-readable download: ncrb.gov.in is behind bot validation, and 'Crime in India' publishes PDF tables. data.gov.in hosts NCRB datasets under the Govt Open Data License - India but district-level coverage skews to older years.",
+      "Crime-type shares are not mapped to NCRB IPC crime-head categories, so they are not directly comparable to published tables."
+    ],
+    "candidate_sources": [
+      "NCRB 'Crime in India' annual report, state and city tables (PDF; 2022 volumes mirrored at archive.org/details/PARI.crime-in-india-2022-volume-ii)",
+      "data.gov.in NCRB catalogues, Govt Open Data License - India",
+      "Karnataka State Police / District Crime Record Bureau published figures"
+    ]
+  },
+
+  "district_weights": {
+    "_note": "Relative sampling weights, not counts. Only the ratios matter; the loader normalises them. Names must match the DISTRICTS list used by the seeder.",
+    "_basis": "illustrative",
+    "_source": "none - chosen to be plausible, see _provenance.summary",
+    "values": {
+      "Bengaluru Urban": 22,
+      "Mysuru": 13,
+      "Hubli": 12,
+      "Belagavi": 11,
+      "Mangaluru": 11,
+      "Kalaburagi": 10,
+      "Tumakuru": 9,
+      "Raichur": 9,
+      "Bengaluru Rural": 8,
+      "Dharwad": 7
+    }
+  },
+
+  "crime_type_shares": {
+    "_note": "Relative sampling weights across the seeded crime types.",
+    "_basis": "illustrative",
+    "_source": "none - chosen so property crime dominates and homicide is rare, which is directionally true of reported IPC crime but is NOT a sourced figure",
+    "values": {
+      "Theft": 30,
+      "Assault": 12,
+      "Burglary": 12,
+      "Cheating": 11,
+      "Snatching": 8,
+      "Robbery": 7,
+      "Rioting": 6,
+      "Forgery": 6,
+      "Murder": 4,
+      "Counterfeiting": 4
+    }
+  }
+}

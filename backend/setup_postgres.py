@@ -81,11 +81,28 @@ def main():
     db = SessionLocal()
     have_official = db.query(CaseMaster).count()
     total_crimes = db.query(Crime).count()
+    # Matching COUNTS are not enough: re-seeding regenerates crimes with fresh
+    # FIR0001-style numbers while old CaseMaster rows survive, so 920 == 920 can
+    # describe a projection that no longer corresponds to any current crime.
+    # Confirm the two layers actually agree before declaring it complete.
+    stale = False
+    if have_official and have_official == total_crimes:
+        sample = db.query(Crime).order_by(Crime.id).limit(25).all()
+        official_nos = {
+            n for (n,) in db.query(CaseMaster.CrimeNo)
+                            .filter(CaseMaster.CrimeNo.in_([c.fir_number for c in sample]))
+        }
+        matched = sum(1 for c in sample if c.fir_number in official_nos)
+        stale = matched == 0
     db.close()
-    if have_official == total_crimes and have_official > 0:
+
+    if have_official == total_crimes and have_official > 0 and not stale:
         print(f"Official schema already complete ({have_official} cases).")
     else:
-        if have_official:
+        if stale:
+            print(f"Official schema is STALE ({have_official} cases that no longer "
+                  f"match any current crime) — rebuilding...")
+        elif have_official:
             print(f"Official schema INCOMPLETE ({have_official}/{total_crimes} cases) "
                   f"— rebuilding...")
         else:
