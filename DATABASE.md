@@ -3,7 +3,8 @@
 Reference for the Phase 2 persistence work: the storage architecture, how to run
 it, what has been verified, and what is still open.
 
-**Branch:** `feature/phase2-persistence` (10 commits ahead of `main`)
+**Branch:** `feature/phase2-persistence`, not yet merged to `main`
+(`git rev-list --count main..HEAD` for the current commit count)
 
 ---
 
@@ -186,6 +187,8 @@ caught locally without a remote database.
 - Local SQLite projection re-verified complete: 920 crimes -> 920 CaseMaster
 - `deploy.ps1` parses cleanly and its vendor check was tested both ways: passes
   with the real requirements, blocks when a dependency is absent
+- App boots clean on SQLite after all of the above; `GET /api/system/info` and
+  `GET /api/forecast` both return live, correct payloads
 
 Not yet verified: the **live** deployment on PostgreSQL. That needs the Catalyst
 environment variables set, which requires console access.
@@ -205,7 +208,8 @@ environment variables set, which requires console access.
 P4 (second measured model) is **done**: `src/ml/forecast_model.py` scores ten
 candidate forecasters by walk-forward one-step-ahead backtesting, selects the
 best by MAE, and reports error against a naive baseline. Pure Python, so it runs
-on the slim cloud build like the risk model.
+on the slim cloud build like the risk model. Currently selects `holt_damped` at
+MAE 10.18 vs the naive baseline's 11.19 (9.0% better, 16 evaluated months).
 
 ### P1d, concretely
 
