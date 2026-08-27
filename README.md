@@ -32,7 +32,8 @@ tables — `CaseMaster`, `Victim`, `Accused`, `ComplainantDetails`, `ArrestSurre
 etc.) with the official 18-digit `CrimeNo`. See **[the schema module](backend/src/database/models_fir.py)**
 and the projection ETL **[migrate_to_fir_schema.py](backend/migrate_to_fir_schema.py)**.
 
-For a detailed phase-by-phase changelog, see **[PROJECT_STATUS.md](PROJECT_STATUS.md)**.
+For the current plan and status, see **[docs/PHASE2_PLAN.md](docs/PHASE2_PLAN.md)**.
+Superseded documents are kept under **[docs/archive/](docs/archive/)**.
 
 ---
 
