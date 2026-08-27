@@ -4,7 +4,27 @@ import { localizeDistrict } from '../locale';
 
 interface Monthly { month: string; count: number; }
 interface Alert { type: string; district: string; recent: number; previous: number; severity: string; message: string; }
-interface ForecastData { monthly_history: Monthly[]; next_month_forecast: number | null; alerts: Alert[]; alert_count: number; }
+// Backtested forecast model provenance, from /api/forecast -> model.
+// The model is SELECTED by walk-forward backtesting, so the error shown here is
+// measured on held-out months rather than asserted.
+interface ForecastModel {
+  available: boolean;
+  name?: string;
+  validation?: string;
+  metrics?: { mae: number; rmse: number; mape: number };
+  baseline?: { method: string; mae: number; rmse: number; mape: number };
+  improvement_over_baseline_pct?: number;
+  evaluated_months?: number;
+  excluded_partial_month?: string | null;
+  reason?: string | null;
+}
+interface ForecastData {
+  monthly_history: Monthly[];
+  next_month_forecast: number | null;
+  alerts: Alert[];
+  alert_count: number;
+  model?: ForecastModel;
+}
 interface Seasonal {
   monthly_seasonality: Monthly[];
   avg_per_month: number;
@@ -71,9 +91,49 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
       <h2 style={{ color: '#1a237e', fontSize: 24, marginBottom: 6 }}>
         🔮 {t('Crime Forecasting & Early Warning', 'ಅಪರಾಧ ಮುನ್ಸೂಚನೆ ಮತ್ತು ಮುನ್ನೆಚ್ಚರಿಕೆ')}
       </h2>
-      <p style={{ color: '#666', fontSize: 14, marginBottom: 20 }}>
+      <p style={{ color: '#666', fontSize: 14, marginBottom: 12 }}>
         {t('Trend projection and proactive alerts', 'ಪ್ರವೃತ್ತಿ ಪ್ರಕ್ಷೇಪಣೆ ಮತ್ತು ಸಕ್ರಿಯ ಎಚ್ಚರಿಕೆಗಳು')}
       </p>
+
+      {/* Backtested-model provenance badge — mirrors the risk-model badge in
+          ProfilesView. Shows WHICH forecaster won, its held-out error, and how
+          much it beats a naive baseline, so the projection is auditable rather
+          than a black box. */}
+      {data.model?.available && data.model.metrics && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          background: '#e8f5e9', border: '1px solid #a5d6a7', borderRadius: 8,
+          padding: '8px 14px', marginBottom: 20, fontSize: 13, color: '#1b5e20',
+        }}>
+          <span style={{ fontWeight: 700 }}>
+            🤖 {t('Forecast by backtested model', 'ಬ್ಯಾಕ್‌ಟೆಸ್ಟ್ ಮಾಡಿದ ಮಾದರಿ')}: <code>{data.model.name}</code>
+          </span>
+          <span>MAE <strong>{data.model.metrics.mae}</strong></span>
+          <span>RMSE <strong>{data.model.metrics.rmse}</strong></span>
+          <span>MAPE <strong>{data.model.metrics.mape}%</strong></span>
+          {data.model.baseline && (
+            <span style={{
+              background: (data.model.improvement_over_baseline_pct ?? 0) > 0 ? '#c8e6c9' : '#ffe0b2',
+              borderRadius: 10, padding: '2px 8px', fontWeight: 700,
+            }}>
+              {(data.model.improvement_over_baseline_pct ?? 0) > 0 ? '↓' : '↑'}{' '}
+              {Math.abs(data.model.improvement_over_baseline_pct ?? 0)}%{' '}
+              {t('error vs', 'ದೋಷ vs')} {data.model.baseline.method} ({data.model.baseline.mae})
+            </span>
+          )}
+          <span style={{ color: '#558b2f' }}>
+            · {data.model.evaluated_months} {t('months held out', 'ತಿಂಗಳು ಪರೀಕ್ಷಿಸಲಾಗಿದೆ')}
+          </span>
+        </div>
+      )}
+      {data.model && !data.model.available && data.model.reason && (
+        <div style={{
+          display: 'inline-block', background: '#fff8e1', border: '1px solid #ffe082',
+          borderRadius: 8, padding: '8px 14px', marginBottom: 20, fontSize: 13, color: '#8d6e00',
+        }}>
+          ⚠️ {t('Forecast not yet validated', 'ಮುನ್ಸೂಚನೆ ಇನ್ನೂ ಮೌಲ್ಯೀಕರಿಸಿಲ್ಲ')}: {data.model.reason}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
         <div style={{ ...card, flex: '1 1 200px', borderTop: '4px solid #1a237e' }}>
@@ -96,6 +156,15 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
 
       <div style={{ ...card, marginBottom: 20 }}>
         <div style={cardTitle}>📈 {t('Monthly Trend & Projection', 'ಮಾಸಿಕ ಪ್ರವೃತ್ತಿ ಮತ್ತು ಪ್ರಕ್ಷೇಪಣೆ')}</div>
+        {data.model?.available && (
+          <div style={{ fontSize: 12, color: '#888', marginTop: -8, marginBottom: 12 }}>
+            {t('Validation', 'ಮೌಲ್ಯೀಕರಣ')}: <span style={{ fontStyle: 'italic' }}>{data.model.validation}</span>
+            {data.model.excluded_partial_month && (
+              <> · {t('the in-progress month', 'ನಡೆಯುತ್ತಿರುವ ತಿಂಗಳು')} ({data.model.excluded_partial_month}){' '}
+                {t('is excluded so it cannot drag the trend down', 'ಪ್ರವೃತ್ತಿಯನ್ನು ತಗ್ಗಿಸದಂತೆ ಹೊರಗಿಡಲಾಗಿದೆ')}</>
+            )}
+          </div>
+        )}
         <svg width={W} height={H} style={{ maxWidth: '100%' }}>
           {[0, 0.5, 1].map((g, i) => {
             const y = P.t + ch - g * ch;

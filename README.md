@@ -41,7 +41,7 @@ For a detailed phase-by-phase changelog, see **[PROJECT_STATUS.md](PROJECT_STATU
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python, FastAPI, SQLAlchemy |
-| Database | SQLite (dev) / PostgreSQL (prod) — DB-agnostic ORM |
+| Database | PostgreSQL (prod, persistent) / SQLite (dev) — one codebase, swap via `DATABASE_URL`; date-part SQL is emitted per dialect so both are genuinely supported |
 | NLP | scikit-learn (TF-IDF + LogisticRegression) + rule-based entities + Kannada normalization |
 | Conversational AI (planned upgrade) | Local LLM via **Ollama** (`qwen2.5:3b`) as a decoupled understanding/narration service |
 | Frontend | React 18 + TypeScript |
@@ -127,7 +127,14 @@ persisted, supervisor-viewable audit log.
         │  FastAPI app (single origin)          │
         │   • serves the React build (static)   │
         │   • serves /api/... on the same host  │  ← no CORS / no gateway preflight
-        │   • SQLite (/tmp), auto-seeded         │
+        └─────────┬─────────────────────────────┘
+                  │ TLS
+        ┌─────────▼─────────────────────────────┐
+        │   PostgreSQL (managed, persistent)    │
+        │   • survives restarts & redeploys     │
+        │   • shared by every app instance      │
+        │   • analytics tables + official FIR   │
+        │     schema + v_crimes view            │
         └─────────┬─────────────────────────────┘
                   │ HTTPS (optional — language understanding only)
         ┌─────────▼──────────┐
@@ -222,11 +229,17 @@ See `backend/.env.example`. Key variables:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `DATABASE_URL` | SQLite | Switch to PostgreSQL in production |
-| `KSP_SECRET_KEY` | dev value | Token signing secret (change in prod) |
+| `DATABASE_URL` | SQLite (dev) | PostgreSQL connection string in production; needs `?sslmode=require` on most managed providers |
+| `KSP_AUTOSEED` | `true` | **Set `false` on a persistent database** so real data is never re-seeded |
+| `KSP_SECRET_KEY` | dev value | Token signing secret — must be overridden in prod (`python -c "import secrets; print(secrets.token_hex(32))"`) |
 | `KSP_AUTH_REQUIRED` | `true` | Set `false` for local demos |
-| `KSP_CORS_ORIGINS` | localhost:3000 | Allowed frontend origins |
+| `KSP_CORS_ORIGINS` | localhost:3000 | Allowed frontend origins (unused on AppSail — same origin) |
 | `KSP_EXPOSE_SQL` | `false` | Expose generated SQL (debug only) |
+| `KSP_DB_POOL_RECYCLE` / `_SIZE` / `_MAX_OVERFLOW` | 280 / 5 / 10 | Pool tuning for managed PostgreSQL |
+
+For the deployed app these live in `app-config.json` (gitignored — copy
+`app-config.example.json`) and can be overridden in the Catalyst console.
+See **[DATABASE.md](DATABASE.md)** and **[DEPLOYMENT.md](DEPLOYMENT.md)**.
 
 Frontend: `REACT_APP_API_BASE` (default `http://localhost:8004`).
 
@@ -284,8 +297,14 @@ and (4) runs `catalyst deploy`. Live URL:
 ### Notes on AppSail
 - AppSail does **not** run `pip install` on the server, so Linux wheels are
   **vendored** with the app (handled by `vendor-deps.ps1` / `deploy.ps1`).
-- `main.py` binds to Catalyst's `X_ZOHO_CATALYST_LISTEN_PORT` and **auto-seeds**
-  the DB on first boot; SQLite writes to `/tmp` (app dir is read-only).
+- `main.py` binds to Catalyst's `X_ZOHO_CATALYST_LISTEN_PORT`.
+- The database is **managed PostgreSQL**, set via `DATABASE_URL`, so data survives
+  restarts and redeploys and is shared across instances. Auto-seeding is turned
+  **off** in production (`KSP_AUTOSEED=false`) and in any case only ever runs on an
+  empty database, so real data is never overwritten. `GET /api/system/info` reports
+  the active backend and whether storage is persistent. Do **not** point
+  `DATABASE_URL` at SQLite on AppSail: the app directory is read-only and `/tmp` is
+  ephemeral, so every restart would wipe the data. See **[DATABASE.md](DATABASE.md)**.
 - In the cloud `KSP_NLP_PROVIDER=rules` is used (Ollama can't run on Catalyst);
   the heavy ML stack (scikit-learn/numpy) is optional and a keyword classifier is
   used instead.
@@ -311,11 +330,33 @@ Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
 
 ---
 
+## Two measured models (not heuristics)
+
+Both report an honest metric, and both run as pure Python at inference time so the
+slim cloud build needs no scikit-learn or numpy.
+
+| Model | What it does | Validation | Result |
+|-------|--------------|-----------|--------|
+| Offender risk | Ranks repeat offenders by reoffence risk | Held-out test split | ROC-AUC **0.992**, accuracy **0.977** |
+| Crime-volume forecast | Projects next month's incident count | Walk-forward one-step-ahead backtest over 16 held-out months | MAE **10.18** vs naive baseline **11.19** (**9.0%** better) |
+
+The forecaster is *selected* by the backtest: ten candidates (naive, moving
+averages, drift, seasonal naive, linear trend, damped trend, SES, Holt damped) are
+each scored one-step-ahead, and the lowest-MAE method wins — currently
+`holt_damped`. The in-progress calendar month is excluded so a partial count can't
+drag the trend down. Both metrics are surfaced in the UI next to the numbers they
+produce, so a reviewer can see what the model is worth.
+
+Simple models are deliberate here: with ~2 years of monthly history a
+high-capacity model would overfit, and a measured error against a baseline is more
+defensible than an unvalidated complex one.
+
+---
+
 ## Roadmap
 - Load real/realistic KSP data (financial, gangs, and demographics are currently
   synthetic; the official schema is ready to receive real data).
-- Migrate to PostgreSQL for the production database (currently SQLite on `/tmp`).
-- Upgrade forecasting from a moving-average to a seasonality-aware ML model.
+- Move accused photos from base64 database blobs to Catalyst File Store.
 - Unify victims / locations / financial accounts into the network graph.
 - Grow the automated test suite to cover the newer endpoints.
 
