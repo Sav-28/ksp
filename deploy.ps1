@@ -8,6 +8,54 @@
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
+# --- Config safety check (runs first: fail before doing any work) -----------
+# app-config.json carries the AppSail env_variables, including the database
+# password and the token signing key. It is gitignored, so it must be created
+# locally from app-config.example.json. These checks stop the two failure modes
+# that have actually bitten this project: deploying with an ephemeral SQLite
+# path (data wiped on restart) and deploying with the old signing key that was
+# committed to the public repo (forgeable admin tokens).
+$cfgPath = Join-Path $root "app-config.json"
+if (-not (Test-Path $cfgPath)) {
+    Write-Host "ERROR: app-config.json is missing." -ForegroundColor Red
+    Write-Host "Copy app-config.example.json to app-config.json and fill in real values." -ForegroundColor Red
+    exit 1
+}
+$cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+$dbUrl  = [string]$cfg.env_variables.DATABASE_URL
+$secret = [string]$cfg.env_variables.KSP_SECRET_KEY
+$seed   = [string]$cfg.env_variables.KSP_AUTOSEED
+$LEAKED_KEY = "ksp-demo-3f9a7c21b64e48d0a1e2c5f7d9b0a4e6"
+$fatal = @()
+
+if ($dbUrl -match "PASTE_|REPLACE_|USER:PASSWORD" -or [string]::IsNullOrWhiteSpace($dbUrl)) {
+    $fatal += "DATABASE_URL is still a placeholder. Paste the real PostgreSQL connection string."
+}
+elseif ($dbUrl -like "sqlite*") {
+    $fatal += "DATABASE_URL points at SQLite. On AppSail this is an ephemeral path, so all data is lost on restart. Use the PostgreSQL connection string."
+}
+elseif ($dbUrl -notmatch "sslmode=") {
+    Write-Host "WARNING: DATABASE_URL has no sslmode - most managed providers need ?sslmode=require." -ForegroundColor Yellow
+}
+
+if ($secret -eq $LEAKED_KEY) {
+    $fatal += "KSP_SECRET_KEY is the key that was committed to the public repo. It signs auth tokens, so anyone could forge an admin session. Generate a new one: python -c ""import secrets; print(secrets.token_hex(32))"""
+}
+elseif ($secret -match "GENERATE_WITH|change-me" -or $secret.Length -lt 32) {
+    $fatal += "KSP_SECRET_KEY is a placeholder or too short (needs 32+ chars)."
+}
+
+if ($seed -ne "false") {
+    $fatal += "KSP_AUTOSEED must be 'false' on a persistent database so real data is never re-seeded (currently '$seed')."
+}
+
+if ($fatal.Count -gt 0) {
+    Write-Host "`nDeploy blocked - fix these in app-config.json:" -ForegroundColor Red
+    $fatal | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+    exit 1
+}
+Write-Host "[0/5] Config check passed (PostgreSQL, fresh secret, autoseed off)." -ForegroundColor Green
+
 Write-Host "[1/5] Building the React frontend (same-origin)..." -ForegroundColor Cyan
 Push-Location (Join-Path $root "frontend")
 npm run build

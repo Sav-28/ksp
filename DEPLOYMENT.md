@@ -113,16 +113,41 @@ build artifacts.)
 catalyst deploy          # bundles backend/ and deploys the AppSail service
 ```
 
-### Step 5 — Set AppSail environment variables (Catalyst console → AppSail → Configuration)
+### Step 5 — Set AppSail environment variables
+
+There are two places these can be set, and it matters which you use.
+
+**`app-config.json` (primary).** The `env_variables` block in this file ships with
+every deploy. This file is **gitignored** because it holds the database password
+and the token signing key, and this repository is public. Create it once from the
+template:
+
+```powershell
+Copy-Item app-config.example.json app-config.json
+# then edit the env_variables block
+```
+
 | Key | Value |
 |-----|-------|
-| `DATABASE_URL` | `sqlite:////tmp/ksp_crime_ai.db`  (app dir is read-only — use /tmp) |
-| `KSP_NLP_PROVIDER` | `rules` |
-| `KSP_SECRET_KEY` | a long random string |
-| `KSP_CORS_ORIGINS` | your Slate frontend URL (e.g. `https://ksp-xxxx…slate.in`) |
-| `KSP_AUTOSEED` | `true` |
+| `DATABASE_URL` | your PostgreSQL connection string, e.g. `postgresql://user:pw@host/db?sslmode=require` |
+| `KSP_NLP_PROVIDER` | `rules` (Ollama can't run on Catalyst) |
+| `KSP_SECRET_KEY` | 64 hex chars: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `KSP_AUTOSEED` | `false` on a persistent database, so real data is never re-seeded |
 
-Redeploy (or restart the instance) after setting env vars.
+> Do **not** use `sqlite:////tmp/...` here. `/tmp` on AppSail is ephemeral, so every
+> restart wipes the data — this was the original persistence bug. PostgreSQL only.
+
+**Catalyst console → AppSail → Configuration (override).** Per the
+[AppSail configuration docs](https://docs.catalyst.zoho.com/en/serverless/help/appsail/console/configurations/),
+whatever you set in `app-config.json` is reflected into this console section after
+a deploy, and editing it in the console **overrides** what came from your code.
+Useful for rotating a value without redeploying — restart the instance afterwards.
+Because a later deploy re-applies `app-config.json`, keep the two in sync so a
+routine deploy doesn't silently revert a console-only change.
+
+`deploy.ps1` refuses to deploy if `app-config.json` is missing, still has
+placeholders, points at SQLite, leaves `KSP_AUTOSEED` on, or still contains the
+signing key that was committed to the public repo.
 
 ### Step 6 — Wire the frontend to the backend
 - AppSail gives the backend a URL. Put it into **Slate → App Variables →

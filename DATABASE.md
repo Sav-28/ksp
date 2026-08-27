@@ -89,6 +89,20 @@ Managed PostgreSQL silently closes idle connections, which surfaces as
 Auto-seed is additionally guarded to run only on an **empty** database, so it
 cannot clobber real data even if the flag is left on.
 
+### Where these are set for the deployed app
+
+`app-config.json` at the repo root holds the AppSail `env_variables` block. It is
+**gitignored** — it carries the database password and the token signing key, and
+this repository is public. Create it from `app-config.example.json`.
+
+The Catalyst console (AppSail -> Configuration) can override these values after a
+deploy, which is handy for rotating a secret without redeploying. A later deploy
+re-applies `app-config.json`, so keep the two in sync.
+
+`deploy.ps1` blocks the deploy if `app-config.json` is missing, still contains
+placeholders, points at SQLite (ephemeral on AppSail), leaves `KSP_AUTOSEED` on,
+or still contains the signing key that was committed to the public repo.
+
 Secrets live in the environment only, never in the repo.
 
 ---
