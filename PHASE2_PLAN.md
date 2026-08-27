@@ -6,7 +6,10 @@ it is to close the credibility gaps judges probe, and deepen the platform.
 
 Round-1 honest score: ~80/100. Target: 90+.
 
-**Current branch:** `feature/phase2-persistence` (5 commits ahead of `main`)
+**Current branch:** `feature/phase2-persistence` (10 commits ahead of `main`)
+
+See `DATABASE.md` for the persistence architecture, how to run it, and the full
+verified list.
 
 ---
 
@@ -16,11 +19,11 @@ Round-1 honest score: ~80/100. Target: 90+.
 |----|------|--------|
 | P1a | Make the data layer genuinely PostgreSQL-portable | ✅ Done |
 | P1b | Provision persistent PostgreSQL + initialise it | ✅ Done (Neon) |
-| P1c | Point the running app at PostgreSQL and prove persistence | ⏳ **Next** |
-| P1d | Set Catalyst env vars, redeploy, verify live | ⏳ Next |
-| P1e | Merge to `main` | ⏳ Next |
+| P1c | Point the running app at PostgreSQL and prove persistence | ✅ Done |
+| P4 | Second measured model — forecasting with a backtest | ✅ Done |
+| P1d | Set Catalyst env vars, redeploy, verify live | ⏳ **Next** (needs console access) |
+| P1e | Merge to `main` | ⏳ After P1d |
 | P2.2 | Catalyst File Store for accused photos | ⬜ Planned |
-| P4 | Second measured model — forecasting with a backtest | ⬜ Planned |
 | P3 | Real / realistic data ingestion | ⬜ Planned |
 | P2.3/2.4 | Catalyst managed auth, scheduled Functions | ⬜ Optional |
 | P5 | Re-record demo video, update deck + README | ⬜ Last |
@@ -73,7 +76,7 @@ Neon PostgreSQL 18.4, initialised via `python setup_postgres.py`:
 
 ---
 
-## ⏳ P1c — Prove persistence locally (next, ~20 min)
+## ✅ P1c — Persistence proven locally (done)
 
 ```powershell
 cd backend
@@ -91,8 +94,23 @@ Then, in the app (or via the API):
 5. Open a second browser and confirm the same record is visible.
 
 **Acceptance:** the record survives a restart and is visible from two clients.
+**Result:** passed — the FIR and its offender profile survived a backend restart
+and were visible from a second client. The original bug is fixed.
 
-## ⏳ P1d — Deploy with persistence
+Two further fixes came out of running on Neon:
+- Casework endpoints failed on PostgreSQL (unquoted mixed-case identifiers and a
+  `GROUP BY` that SQLite tolerates but PostgreSQL rejects).
+- The FIR projection is now written in 100-case committed chunks, because
+  serverless PostgreSQL drops long transactions partway through ~900 cases.
+
+## ⏳ P1d — Deploy with persistence (next)
+
+**Blocker fixed first:** `deploy.ps1` skipped vendoring whenever
+`backend/vendor/fastapi` existed, so the newly added `psycopg2` driver would
+never have shipped and the live app would have hit `ModuleNotFoundError` on its
+first database call. Vendoring is now keyed on a hash of `requirements.txt` and
+re-runs on any change, plus a pre-deploy step aborts if any requirement is
+missing from `vendor/`. `psycopg2-binary 2.9.10` is vendored.
 
 Set in the Catalyst environment (not in the repo):
 ```
@@ -119,15 +137,26 @@ service to the submission (currently only AppSail).
 `persons`, serve via a thin API route, keep base64 as a fallback so nothing
 breaks if File Store is unavailable.
 
-## ⬜ P4 — Second measured model (forecasting with a backtest)
+## ✅ P4 — Second measured model (done)
 
-**Why:** offender risk is a real trained model (AUC 0.99), but forecasting is
-still a moving average. A second model with an honest metric strengthens the AI
-claim considerably.
+Forecasting was a 3-month moving average with **no evaluation**, so there was no
+way to say whether it worked.
 
-**Plan:** monthly crime-volume forecast, evaluated by **backtesting on held-out
-months**, reporting MAE/RMSE against a naive baseline. Surface the metric in the
-FORECAST tab the way the risk badge does.
+`src/ml/forecast_model.py` now holds ten candidate forecasters (naive, mean3,
+wma3, drift, seasonal naive, linear trend, the old ma_trend, damped trend, SES,
+Holt damped) and scores them all with **walk-forward one-step-ahead backtesting**
+— train on months 1..t, predict t+1, step forward, never peeking at the future.
+It selects the best by MAE and reports MAE/RMSE/MAPE plus improvement over the
+naive baseline, surfaced through `decision_support.py`.
+
+Deliberately pure Python (no numpy/sklearn at runtime) so it works on the slim
+cloud build, like the risk model. Simple models are the right call here: with
+~2 years of monthly history a high-capacity model would overfit, and a measured
+error against a baseline is more defensible than an unvalidated complex model.
+
+Also fixed while doing this: the seeder had a **recency cliff** (the current
+partial month dragged the trend down). `split_complete_months()` now separates
+the still-accumulating month so it corrupts neither the backtest nor the forecast.
 
 ## ⬜ P3 — Real / realistic data
 
