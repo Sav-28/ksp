@@ -36,11 +36,17 @@ feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pac
    offender. **Say:** *"This score is a trained model, not a formula —
    ROC-AUC 0.992 on held-out data — with explainable risk factors below."*
 
-5. **A second measured model.** → FORECAST tab. Point at the green badge:
-   **"🤖 Forecast by backtested model: holt_damped · MAE 10.18 · 9% error vs
-   naive".** **Say:** *"The forecaster isn't hand-picked. Ten candidates are scored
-   by walk-forward backtesting on held-out months, and the lowest-error one wins.
-   We report the error against a naive baseline, so you can see what it's worth."*
+5. **A second measured model.** → FORECAST tab. Point at the green badge —
+   **"🤖 Forecast by backtested model"** with the selected method, MAE, and a chip
+   showing the percentage improvement over the naive baseline. **Say:** *"The
+   forecaster isn't hand-picked. Ten candidates are scored by walk-forward
+   backtesting on held-out months, and the lowest-error one wins. We report the
+   error against a naive baseline, so you can see what it's worth."* Point at the
+   shaded band on the chart: *"And the projection carries an 80% interval derived
+   from the error we actually measured, not an assumed variance."*
+
+   > **Read the badge live, don't quote a number from memory.** The winning method
+   > and its error depend on the seeded data, so they can change after a re-seed.
 
 6. **Close the loop — decision support + governance.** In the chat, ask
    *"summarize this case"* and *"find similar cases"*. Then → CASE INVESTIGATION,
@@ -73,7 +79,7 @@ feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pac
 | 5 | PROFILES | 5 | **Trained ML risk model (ROC-AUC 0.992)** + explainable factors |
 | 6 | Chat: "summarize / similar cases" | 6 | Case summaries, timelines, leads |
 | 7 | FINANCE | 7 | Suspicious money-trail (demo integration) |
-| 8 | FORECAST | 8 | **Backtested forecast (MAE 10.18, 9% better than naive)** + anomaly detection (z-score) |
+| 8 | FORECAST | 8 | **Backtested forecast** with MAE vs naive baseline + 80% interval, plus anomaly detection (z-score) |
 | 9 | "Why this answer?" on any reply | 9 | Explainable evidence trail |
 | 10 | REGISTER FIR / close case / AUDIT | 10 | RBAC write workflow + audit log |
 
@@ -85,10 +91,11 @@ feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pac
   Offender risk is trained on demographic/severity/gang features: **ROC-AUC 0.992**
   on a held-out split, with feature importances shown. Crime-volume forecasting
   **selects** among ten candidate forecasters by walk-forward one-step-ahead
-  backtesting and reports **MAE 10.18 against a naive baseline's 11.19** over 16
-  held-out months. Anomaly detection is z-score — deliberately transparent for a
-  policing context. Both models run as pure Python at inference time, so the cloud
-  build needs no heavy ML stack.
+  backtesting over 16 held-out months, reports its MAE against a naive baseline,
+  and attaches an 80% prediction interval from the measured RMSE. Read the current
+  figures off the badge — they move with the data. Anomaly detection is z-score —
+  deliberately transparent for a policing context. Both models run as pure Python
+  at inference time, so the cloud build needs no heavy ML stack.
 - **"Why such simple models?"** — With about two years of monthly history a
   high-capacity model would overfit. A measured error against a baseline is more
   defensible than an unvalidated complex model, and in policing an explainable

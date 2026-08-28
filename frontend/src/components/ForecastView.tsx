@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
-import { localizeDistrict } from '../locale';
+import { localizeDistrict, localizeCrimeType } from '../locale';
 
 interface Monthly { month: string; count: number; }
-interface Alert { type: string; district: string; recent: number; previous: number; severity: string; message: string; }
+interface Alert {
+  type: string; district: string; recent: number; previous: number;
+  severity: string; message: string;
+  // Added when crime-type surges were introduced alongside district surges.
+  scope?: 'district' | 'crime type'; name?: string; change?: string;
+}
 // Backtested forecast model provenance, from /api/forecast -> model.
 // The model is SELECTED by walk-forward backtesting, so the error shown here is
 // measured on held-out months rather than asserted.
@@ -18,9 +23,17 @@ interface ForecastModel {
   excluded_partial_month?: string | null;
   reason?: string | null;
 }
+interface ForecastInterval {
+  level: number; low: number; high: number; margin: number; basis: string;
+}
 interface ForecastData {
   monthly_history: Monthly[];
   next_month_forecast: number | null;
+  forecast_interval?: ForecastInterval | null;
+  forecast_month?: string | null;
+  forecast_is_current_month?: boolean;
+  partial_month?: string | null;
+  partial_month_count_so_far?: number | null;
   alerts: Alert[];
   alert_count: number;
   model?: ForecastModel;
@@ -70,21 +83,32 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
   if (!data) return null;
 
   // Chart geometry
-  const W = 760, H = 240, P = { t: 20, r: 20, b: 40, l: 40 };
+  const W = 760, H = 260, P = { t: 20, r: 24, b: 52, l: 40 };
   const cw = W - P.l - P.r, ch = H - P.t - P.b;
   const hist = data.monthly_history;
-  const allVals = hist.map(h => h.count).concat(data.next_month_forecast ? [data.next_month_forecast] : []);
+  const iv = data.forecast_interval;
+  // Scale to the interval's upper bound too, so the band is never clipped.
+  const allVals = hist.map(h => h.count)
+    .concat(data.next_month_forecast != null ? [data.next_month_forecast] : [])
+    .concat(iv ? [iv.high] : []);
   const max = Math.max(...allVals, 1);
   const n = hist.length;
-  const pts = hist.map((h, i) => ({
-    x: P.l + (n <= 1 ? cw / 2 : (i / (n - 1)) * cw),
-    y: P.t + ch - (h.count / max) * ch,
-    ...h,
-  }));
+  // Reserve a slot at the right for the forecast. Previously the forecast point
+  // was placed at P.l + cw, which is exactly where the LAST history point sits,
+  // so the orange marker covered the final actual value and the dashed
+  // "projection" segment had zero length.
+  const slots = n + (data.next_month_forecast != null ? 1 : 0);
+  const step = slots > 1 ? cw / (slots - 1) : 0;
+  const xAt = (i: number) => P.l + (slots <= 1 ? cw / 2 : i * step);
+  const yAt = (v: number) => P.t + ch - (v / max) * ch;
+
+  const pts = hist.map((h, i) => ({ x: xAt(i), y: yAt(h.count), ...h }));
   const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  // forecast point just after the last
-  const fx = P.l + cw + 0; // at the right edge
-  const fy = data.next_month_forecast != null ? P.t + ch - (data.next_month_forecast / max) * ch : null;
+  const fx = data.next_month_forecast != null ? xAt(n) : null;
+  const fy = data.next_month_forecast != null ? yAt(data.next_month_forecast) : null;
+
+  // Label roughly six months across so the axis stays readable at any history length.
+  const labelEvery = Math.max(1, Math.ceil(n / 6));
 
   return (
     <div style={{ padding: '30px 40px', backgroundColor: '#fafafa', minHeight: '100%' }}>
@@ -136,10 +160,31 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
       )}
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <div style={{ ...card, flex: '1 1 200px', borderTop: '4px solid #1a237e' }}>
-          <div style={{ fontSize: 12, color: '#666' }}>{t('Next-month forecast', 'ಮುಂದಿನ ತಿಂಗಳ ಮುನ್ಸೂಚನೆ')}</div>
-          <div style={{ fontSize: 30, fontWeight: 800, color: '#1a237e' }}>{data.next_month_forecast ?? '—'}</div>
-          <div style={{ fontSize: 11, color: '#999' }}>{t('projected incidents', 'ಅಂದಾಜು ಘಟನೆಗಳು')}</div>
+        <div style={{ ...card, flex: '1 1 250px', borderTop: '4px solid #1a237e' }}>
+          <div style={{ fontSize: 12, color: '#666' }}>
+            {/* The forecast is one step past the last COMPLETE month, which is
+                normally the month in progress. Naming it avoids implying we are
+                predicting a month that hasn't started. */}
+            {data.forecast_is_current_month
+              ? t('Projected total, month in progress', 'ನಡೆಯುತ್ತಿರುವ ತಿಂಗಳ ಅಂದಾಜು ಒಟ್ಟು')
+              : t('Next-month forecast', 'ಮುಂದಿನ ತಿಂಗಳ ಮುನ್ಸೂಚನೆ')}
+            {data.forecast_month && <strong> · {data.forecast_month}</strong>}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <div style={{ fontSize: 30, fontWeight: 800, color: '#1a237e' }}>{data.next_month_forecast ?? '—'}</div>
+            {iv && (
+              <div style={{ fontSize: 13, color: '#555' }} title={iv.basis}>
+                {iv.low}–{iv.high}{' '}
+                <span style={{ color: '#999' }}>({iv.level}%)</span>
+              </div>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: '#999' }}>
+            {t('projected incidents', 'ಅಂದಾಜು ಘಟನೆಗಳು')}
+            {data.partial_month_count_so_far != null && (
+              <> · {data.partial_month_count_so_far} {t('recorded so far', 'ಇದುವರೆಗೆ ದಾಖಲಾಗಿದೆ')}</>
+            )}
+          </div>
         </div>
         <div style={{ ...card, flex: '1 1 200px', borderTop: '4px solid #e53935' }}>
           <div style={{ fontSize: 12, color: '#666' }}>{t('Active early-warning alerts', 'ಸಕ್ರಿಯ ಮುನ್ನೆಚ್ಚರಿಕೆಗಳು')}</div>
@@ -165,22 +210,72 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
             )}
           </div>
         )}
-        <svg width={W} height={H} style={{ maxWidth: '100%' }}>
+        <svg width={W} height={H} style={{ maxWidth: '100%' }}
+             role="img"
+             aria-label={t(
+               `Monthly crime volume for the last ${n} months, with a projection of ${data.next_month_forecast ?? 'unknown'} for ${data.forecast_month ?? 'the next month'}.`,
+               'ಮಾಸಿಕ ಅಪರಾಧ ಪ್ರಮಾಣ ಮತ್ತು ಮುನ್ಸೂಚನೆ')}>
           {[0, 0.5, 1].map((g, i) => {
             const y = P.t + ch - g * ch;
             return <g key={i}><line x1={P.l} y1={y} x2={W - P.r} y2={y} stroke="#eee" /><text x={P.l - 8} y={y + 4} fontSize={10} fill="#999" textAnchor="end">{Math.round(g * max)}</text></g>;
           })}
+
+          {/* Prediction interval, drawn from the last actual point out to the
+              forecast so the uncertainty is visible rather than implied. */}
+          {iv && fx != null && pts.length > 0 && (
+            <polygon
+              points={`${pts[pts.length - 1].x},${pts[pts.length - 1].y} ${fx},${yAt(iv.high)} ${fx},${yAt(iv.low)}`}
+              fill="#ff9800" fillOpacity={0.16} />
+          )}
+
           <path d={linePath} fill="none" stroke="#1a237e" strokeWidth={2.5} />
-          {pts.map((p, i) => <circle key={i} cx={p.x} cy={p.y} r={3} fill="#1a237e" />)}
-          {/* forecast point */}
-          {fy != null && pts.length > 0 && (
+          {pts.map((p, i) => (
+            <circle key={i} cx={p.x} cy={p.y} r={3} fill="#1a237e">
+              <title>{p.month}: {p.count}</title>
+            </circle>
+          ))}
+
+          {/* X-axis month labels. The chart previously had none, so a reader
+              could not tell which month any point referred to. */}
+          {pts.map((p, i) => (
+            (i % labelEvery === 0 || i === n - 1) ? (
+              <text key={`x${i}`} x={p.x} y={P.t + ch + 16} fontSize={9.5}
+                    fill="#888" textAnchor="middle">{p.month}</text>
+            ) : null
+          ))}
+
+          {fy != null && fx != null && pts.length > 0 && (
             <>
-              <line x1={pts[pts.length - 1].x} y1={pts[pts.length - 1].y} x2={fx} y2={fy} stroke="#ff9800" strokeWidth={2.5} strokeDasharray="5,4" />
-              <circle cx={fx} cy={fy} r={5} fill="#ff9800" stroke="#fff" strokeWidth={2} />
-              <text x={fx} y={fy - 10} fontSize={11} fill="#ef6c00" textAnchor="end" fontWeight={700}>{t('forecast', 'ಮುನ್ಸೂಚನೆ')}</text>
+              <line x1={pts[pts.length - 1].x} y1={pts[pts.length - 1].y} x2={fx} y2={fy}
+                    stroke="#ff9800" strokeWidth={2.5} strokeDasharray="5,4" />
+              {/* Interval whisker at the forecast point. */}
+              {iv && (
+                <>
+                  <line x1={fx} y1={yAt(iv.low)} x2={fx} y2={yAt(iv.high)} stroke="#ef6c00" strokeWidth={1.5} />
+                  <line x1={fx - 4} y1={yAt(iv.high)} x2={fx + 4} y2={yAt(iv.high)} stroke="#ef6c00" strokeWidth={1.5} />
+                  <line x1={fx - 4} y1={yAt(iv.low)} x2={fx + 4} y2={yAt(iv.low)} stroke="#ef6c00" strokeWidth={1.5} />
+                </>
+              )}
+              <circle cx={fx} cy={fy} r={5} fill="#ff9800" stroke="#fff" strokeWidth={2}>
+                <title>
+                  {data.forecast_month}: {data.next_month_forecast}
+                  {iv ? ` (${iv.level}% interval ${iv.low}-${iv.high})` : ''}
+                </title>
+              </circle>
+              <text x={fx} y={(iv ? yAt(iv.high) : fy) - 8} fontSize={11} fill="#ef6c00"
+                    textAnchor="end" fontWeight={700}>{t('forecast', 'ಮುನ್ಸೂಚನೆ')}</text>
+              {data.forecast_month && (
+                <text x={fx} y={P.t + ch + 16} fontSize={9.5} fill="#ef6c00"
+                      textAnchor="middle" fontWeight={700}>{data.forecast_month}</text>
+              )}
             </>
           )}
         </svg>
+        {iv && (
+          <div style={{ fontSize: 11.5, color: '#888', marginTop: 6 }}>
+            {t('Shaded band', 'ಛಾಯೆ ಪಟ್ಟಿ')}: {iv.basis}
+          </div>
+        )}
       </div>
 
       {/* Seasonal & festival-window pattern (Area 3) */}
@@ -249,15 +344,36 @@ const ForecastView = ({ language }: { language: 'en' | 'kn' }) => {
       <div style={card}>
         <div style={cardTitle}>🚨 {t('Early-Warning Alerts', 'ಮುನ್ನೆಚ್ಚರಿಕೆ ಎಚ್ಚರಿಕೆಗಳು')}</div>
         {data.alerts.length === 0 && <div style={{ color: '#999' }}>{t('No active alerts.', 'ಯಾವುದೇ ಸಕ್ರಿಯ ಎಚ್ಚರಿಕೆಗಳಿಲ್ಲ.')}</div>}
-        {data.alerts.map((a, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px', borderRadius: 6, marginBottom: 6, background: a.severity === 'High' ? '#ffebee' : '#fff8e1' }}>
-            <span style={{ fontSize: 18 }}>{a.severity === 'High' ? '🔴' : '🟠'}</span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600 }}>{localizeDistrict(a.district, language)} — {a.severity} {t('severity', 'ತೀವ್ರತೆ')}</div>
-              <div style={{ fontSize: 12, color: '#666' }}>{t('Up from', 'ಇಂದ ಏರಿಕೆ')} {a.previous} → {a.recent} ({t('last 60 days', 'ಕಳೆದ 60 ದಿನ')})</div>
+        {data.alerts.map((a, i) => {
+          // Alerts now cover crime types as well as districts, so only localise
+          // the name when it actually is a district.
+          const isCrimeType = a.scope === 'crime type';
+          const label = isCrimeType
+            ? localizeCrimeType(a.name || a.district, language)
+            : localizeDistrict(a.name || a.district, language);
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px', borderRadius: 6, marginBottom: 6, background: a.severity === 'High' ? '#ffebee' : '#fff8e1' }}>
+              <span style={{ fontSize: 18 }}>{a.severity === 'High' ? '🔴' : '🟠'}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600 }}>
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
+                    background: isCrimeType ? '#ede7f6' : '#e3f2fd',
+                    color: isCrimeType ? '#4527a0' : '#0d47a1',
+                    padding: '2px 6px', borderRadius: 4, marginRight: 8,
+                  }}>
+                    {isCrimeType ? t('crime type', 'ಅಪರಾಧ ಪ್ರಕಾರ') : t('district', 'ಜಿಲ್ಲೆ')}
+                  </span>
+                  {label} — {a.severity} {t('severity', 'ತೀವ್ರತೆ')}
+                </div>
+                <div style={{ fontSize: 12, color: '#666' }}>
+                  {t('Up from', 'ಇಂದ ಏರಿಕೆ')} {a.previous} → {a.recent} ({t('last 60 days', 'ಕಳೆದ 60 ದಿನ')})
+                  {a.change && <> · <strong>{a.change}</strong></>}
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );

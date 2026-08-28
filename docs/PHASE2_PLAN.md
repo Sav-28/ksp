@@ -154,15 +154,20 @@ cloud build, like the risk model. Simple models are the right call here: with
 ~2 years of monthly history a high-capacity model would overfit, and a measured
 error against a baseline is more defensible than an unvalidated complex model.
 
-Measured on the seeded dataset via `GET /api/forecast`:
+Measured on the current seeded dataset via `GET /api/forecast`:
 
-| | MAE | RMSE | MAPE |
-|---|---|---|---|
-| Selected (`holt_damped`) | 10.18 | 13.44 | 25.0% |
-| Baseline (`naive`) | 11.19 | 15.26 | 27.7% |
+| | MAE | RMSE |
+|---|---|---|
+| Selected (`ma_trend`) | 9.11 | 12.66 |
+| Baseline (`naive`) | 10.94 | — |
 
-9.0% better than the baseline over 16 evaluated months. A modest, honest number —
-which is the point; it is measured rather than asserted.
+16.7% better than the baseline over 16 evaluated months.
+
+**These figures move with the data.** An earlier run selected `holt_damped` at MAE
+10.18 (9.0% better); re-seeding regenerates the monthly series relative to the
+current date, which can change both the winner and its error. That is expected — the
+point is that a metric is *measured and reported live*, not that a particular number
+is permanent. Docs quote the current values and defer to the API.
 
 Also fixed while doing this: the seeder had a **recency cliff** (the current
 partial month dragged the trend down). `split_complete_months()` now separates

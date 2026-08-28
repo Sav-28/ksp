@@ -339,14 +339,23 @@ slim cloud build needs no scikit-learn or numpy.
 | Model | What it does | Validation | Result |
 |-------|--------------|-----------|--------|
 | Offender risk | Ranks repeat offenders by reoffence risk | Held-out test split | ROC-AUC **0.992**, accuracy **0.977** |
-| Crime-volume forecast | Projects next month's incident count | Walk-forward one-step-ahead backtest over 16 held-out months | MAE **10.18** vs naive baseline **11.19** (**9.0%** better) |
+| Crime-volume forecast | Projects the incident count for the coming month | Walk-forward one-step-ahead backtest over 16 held-out months | MAE **9.11** vs naive baseline **10.94** (**16.7%** better) |
 
 The forecaster is *selected* by the backtest: ten candidates (naive, moving
 averages, drift, seasonal naive, linear trend, damped trend, SES, Holt damped) are
-each scored one-step-ahead, and the lowest-MAE method wins — currently
-`holt_damped`. The in-progress calendar month is excluded so a partial count can't
-drag the trend down. Both metrics are surfaced in the UI next to the numbers they
-produce, so a reviewer can see what the model is worth.
+each scored one-step-ahead, and the lowest-MAE method wins. The in-progress
+calendar month is excluded so a partial count can't drag the trend down, and the
+point forecast carries an 80% interval derived from the measured backtest RMSE
+rather than an assumed variance.
+
+> **Which method wins, and its exact error, depend on the dataset** — re-seeding
+> shifts the monthly series and can change the selection. The figures above are
+> from the current seeded data. The app reports the live values in the FORECAST
+> tab and in `GET /api/forecast`, so treat those as authoritative rather than this
+> table.
+
+Both models surface their metrics in the UI next to the numbers they produce, so a
+reviewer can see what each is worth.
 
 Simple models are deliberate here: with ~2 years of monthly history a
 high-capacity model would overfit, and a measured error against a baseline is more

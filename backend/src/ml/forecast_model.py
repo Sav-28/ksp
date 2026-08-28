@@ -195,6 +195,39 @@ def backtest(series: List[float], min_train: int = MIN_TRAIN) -> Dict[str, Any]:
     }
 
 
+# Multipliers on the error standard deviation for common interval levels,
+# assuming roughly normal errors (z-scores).
+_Z = {50: 0.67, 80: 1.28, 90: 1.64, 95: 1.96}
+
+
+def prediction_interval(point: float, rmse: float,
+                        level: int = 80) -> Optional[Dict[str, Any]]:
+    """
+    Turn a point forecast into a range, using the error actually measured by the
+    backtest rather than an assumed variance.
+
+    RMSE over the walk-forward one-step-ahead errors is the natural estimate of
+    one-step forecast standard error, so `point +/- z * rmse` gives a usable
+    interval. Counts cannot be negative, so the lower bound is clamped at zero.
+
+    Caveat worth stating wherever this is displayed: it assumes the errors are
+    roughly normal and that their spread is stable over time. With ~2 years of
+    monthly history that is an approximation, not a guarantee.
+    """
+    if point is None or rmse is None or rmse <= 0:
+        return None
+    z = _Z.get(level, _Z[80])
+    margin = z * float(rmse)
+    return {
+        "level": level,
+        "low": max(0, int(round(point - margin))),
+        "high": int(round(point + margin)),
+        "margin": int(round(margin)),
+        "basis": f"{level}% interval from held-out one-step-ahead RMSE "
+                 f"({rmse}); assumes roughly normal, stationary errors",
+    }
+
+
 def forecast_next(series: List[float], method: Optional[str] = None) -> Optional[float]:
     """Predict the next month using `method` (defaults to the backtest winner)."""
     if not series:

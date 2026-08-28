@@ -221,9 +221,11 @@ environment variables set, which requires console access.
 
 P4 (second measured model) is **done**: `src/ml/forecast_model.py` scores ten
 candidate forecasters by walk-forward one-step-ahead backtesting, selects the
-best by MAE, and reports error against a naive baseline. Pure Python, so it runs
-on the slim cloud build like the risk model. Currently selects `holt_damped` at
-MAE 10.18 vs the naive baseline's 11.19 (9.0% better, 16 evaluated months).
+best by MAE, reports error against a naive baseline, and attaches an 80%
+prediction interval from the measured RMSE. Pure Python, so it runs on the slim
+cloud build like the risk model. The winning method and its error depend on the
+seeded data, so `GET /api/forecast` is the authoritative source rather than any
+figure quoted in docs.
 
 ### P1d, concretely
 
