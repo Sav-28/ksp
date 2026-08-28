@@ -339,7 +339,7 @@ slim cloud build needs no scikit-learn or numpy.
 | Model | What it does | Validation | Result |
 |-------|--------------|-----------|--------|
 | Offender risk | Ranks repeat offenders by reoffence risk | Held-out test split | ROC-AUC **0.992**, accuracy **0.977** |
-| Crime-volume forecast | Projects the incident count for the coming month | Walk-forward one-step-ahead backtest over 16 held-out months | MAE **9.11** vs naive baseline **10.94** (**16.7%** better) |
+| Crime-volume forecast | Projects the incident count for the coming month | Walk-forward one-step-ahead backtest over 16 held-out months | Reported live; typically 15-25% lower MAE than a naive baseline |
 
 The forecaster is *selected* by the backtest: ten candidates (naive, moving
 averages, drift, seasonal naive, linear trend, damped trend, SES, Holt damped) are
@@ -348,11 +348,15 @@ calendar month is excluded so a partial count can't drag the trend down, and the
 point forecast carries an 80% interval derived from the measured backtest RMSE
 rather than an assumed variance.
 
-> **Which method wins, and its exact error, depend on the dataset** — re-seeding
-> shifts the monthly series and can change the selection. The figures above are
-> from the current seeded data. The app reports the live values in the FORECAST
-> tab and in `GET /api/forecast`, so treat those as authoritative rather than this
-> table.
+> **The forecast row is deliberately not a fixed number.** Which method wins and
+> what error it achieves both depend on the seeded series, which regenerates
+> relative to the current date — across three re-seeds this selected `holt_damped`,
+> `ma_trend` and `holt_damped` again, at MAE 10.18, 9.11 and 8.18. Quoting one of
+> those as *the* result would be stale within a day. The FORECAST tab and
+> `GET /api/forecast` report the live figures; treat those as authoritative.
+>
+> The offender-risk figure is stable because that model is trained once and its
+> metrics are stored alongside it in `backend/models/risk_model.json`.
 
 Both models surface their metrics in the UI next to the numbers they produce, so a
 reviewer can see what each is worth.

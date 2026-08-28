@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api';
 import { localizeCrimeType, localizePersonName } from '../locale';
+import {
+  GOV, mono, panel, panelHead, panelBody, noteText, table, th, td, tdNum,
+  figure, figureLabel, figureValue, figureSub, chip,
+  pageTitle, pageSubTitle, legalNote, asOn, inr,
+} from '../govStyles';
 
 interface Trail {
   id: number;
@@ -34,8 +39,6 @@ interface FinanceData {
   analysis_note?: string;
 }
 
-const fmt = (n: number) => '₹' + n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
-
 const FinanceView = ({ language }: { language: 'en' | 'kn' }) => {
   const t = (en: string, kn: string) => (language === 'en' ? en : kn);
   const [data, setData] = useState<FinanceData | null>(null);
@@ -48,186 +51,295 @@ const FinanceView = ({ language }: { language: 'en' | 'kn' }) => {
       const res = await apiFetch('/api/financial/trails');
       setData(await res.json());
     } catch (e: any) {
-      setError(e.message === 'UNAUTHORIZED' ? 'Session expired. Please log in again.' : 'Unable to load financial data.');
+      setError(e.message === 'UNAUTHORIZED'
+        ? t('Session expired. Please sign in again.', 'ಅವಧಿ ಮುಗಿದಿದೆ. ಮತ್ತೆ ಸೈನ್ ಇನ್ ಮಾಡಿ.')
+        : t('Unable to load the financial analysis.', 'ಹಣಕಾಸು ವಿಶ್ಲೇಷಣೆ ಲೋಡ್ ಆಗಲಿಲ್ಲ.'));
     } finally { setLoading(false); }
   };
+  // Fetch once on mount. `load` closes over `language` only to phrase the error
+  // message, so re-running it on a language switch would be a pointless refetch.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, []);
 
-  if (loading) return <div style={{ padding: 60, textAlign: 'center', color: '#666' }}>⏳ {t('Tracing money trails...', 'ಹಣದ ಜಾಡು ಪತ್ತೆ...')}</div>;
-  if (error) return <div style={{ padding: 40, textAlign: 'center', color: '#d32f2f' }}>⚠️ {error}</div>;
+  if (loading) return (
+    <div style={{ padding: 60, textAlign: 'center', color: GOV.muted, fontSize: 13 }}>
+      {t('Tracing money trails...', 'ಹಣದ ಜಾಡು ಪತ್ತೆ...')}
+    </div>
+  );
+  if (error) return (
+    <div style={{ padding: 40, textAlign: 'center', color: GOV.breach, fontSize: 13 }}>{error}</div>
+  );
   if (!data) return null;
 
-  return (
-    <div style={{ padding: '30px 40px', backgroundColor: '#fafafa', minHeight: '100%' }}>
-      <h2 style={{ color: '#1a237e', fontSize: 24, marginBottom: 6 }}>
-        💰 {t('Financial Crime & Transaction Analysis', 'ಆರ್ಥಿಕ ಅಪರಾಧ ಮತ್ತು ವಹಿವಾಟು ವಿಶ್ಲೇಷಣೆ')}
-      </h2>
-      <p style={{ color: '#666', fontSize: 14, marginBottom: 12 }}>
-        {t('Suspicious money trails linked to criminal cases', 'ಅಪರಾಧ ಪ್ರಕರಣಗಳಿಗೆ ಸಂಬಂಧಿಸಿದ ಶಂಕಿತ ಹಣದ ಜಾಡುಗಳು')}
-      </p>
-      <div style={{
-        background: '#fff8e1', border: '1px solid #ffe082', borderRadius: 8,
-        padding: '10px 14px', marginBottom: 20, fontSize: 12.5, color: '#7a5c00',
-      }}>
-        ℹ️ {t(
-          'Demo integration: transaction data shown here is representative sample data. In production this module integrates with bank / FIU-IND feeds — the FIR system of record does not itself store financial transactions.',
-          'ಡೆಮೊ ಸಂಯೋಜನೆ: ಇಲ್ಲಿ ತೋರಿಸಿದ ವಹಿವಾಟು ಡೇಟಾ ಮಾದರಿ ಡೇಟಾ. ಉತ್ಪಾದನೆಯಲ್ಲಿ ಇದು ಬ್ಯಾಂಕ್ / FIU-IND ಫೀಡ್‌ಗಳೊಂದಿಗೆ ಸಂಯೋಜಿಸುತ್ತದೆ.')}
-      </div>
+  const conduits = data.pass_through_accounts || [];
+  const dates = data.trails.map(x => x.date).filter(Boolean).sort();
+  const periodFrom = dates[0];
+  const periodTo = dates[dates.length - 1];
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-        <div style={{ ...card, flex: '1 1 180px', borderTop: '4px solid #c62828' }}>
-          <div style={{ fontSize: 12, color: '#666' }}>{t('Suspicious transactions', 'ಶಂಕಿತ ವಹಿವಾಟುಗಳು')}</div>
-          <div style={statVal}>{data.suspicious_transaction_count}</div>
+  /** Ranked account list with a proportional rule. Used for both directions. */
+  const rankedList = (list: TopAccount[], accent: string) => {
+    const top = list[0]?.amount || 1;
+    return (
+      <table style={table}>
+        <thead>
+          <tr>
+            <th style={{ ...th, width: 26 }}>#</th>
+            <th style={th}>{t('Account holder', 'ಖಾತೆದಾರ')}</th>
+            <th style={th}>{t('Value', 'ಮೊತ್ತ')}</th>
+            <th style={th}>{t('Txns', 'ವಹಿವಾಟು')}</th>
+            <th style={{ ...th, width: '34%' }}>{t('Share of highest', 'ಗರಿಷ್ಠದ ಪಾಲು')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((a, i) => (
+            <tr key={a.account_id} style={{ background: i % 2 ? GOV.panelAlt : '#fff' }}>
+              <td style={{ ...tdNum, color: GOV.faint }}>{i + 1}</td>
+              <td style={td}>
+                {localizePersonName(a.name, language)}
+                <div style={{ fontSize: 10.5, color: GOV.faint }}>{a.bank}</div>
+              </td>
+              <td style={{ ...tdNum, fontWeight: 700, whiteSpace: 'nowrap' }}>{inr(a.amount)}</td>
+              <td style={tdNum}>{a.transactions}</td>
+              <td style={td}>
+                <div style={{ height: 9, background: '#e8eaee' }}>
+                  <div style={{ width: `${Math.max(2, (a.amount / top) * 100)}%`, height: '100%', background: accent }} />
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
+  return (
+    <div style={{ padding: '22px 30px 40px', background: GOV.panelAlt, minHeight: '100%', color: GOV.ink }}>
+
+      {/* Report header */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+        flexWrap: 'wrap', gap: 12, borderBottom: `2px solid ${GOV.navy}`,
+        paddingBottom: 10, marginBottom: 16,
+      }}>
+        <div>
+          <h2 style={pageTitle}>
+            {t('Financial Crime & Transaction Analysis', 'ಆರ್ಥಿಕ ಅಪರಾಧ ಮತ್ತು ವಹಿವಾಟು ವಿಶ್ಲೇಷಣೆ')}
+          </h2>
+          <div style={pageSubTitle}>
+            {t('Flagged transfers, counterparty concentration and layering indicators',
+               'ಗುರುತಿಸಿದ ವರ್ಗಾವಣೆ, ಪ್ರತಿಪಕ್ಷ ಕೇಂದ್ರೀಕರಣ ಮತ್ತು ಪದರೀಕರಣ ಸೂಚಕಗಳು')}
+          </div>
         </div>
-        <div style={{ ...card, flex: '1 1 180px', borderTop: '4px solid #ff9800' }}>
-          <div style={{ fontSize: 12, color: '#666' }}>{t('Total flagged amount', 'ಒಟ್ಟು ಗುರುತಿಸಿದ ಮೊತ್ತ')}</div>
-          <div style={statVal}>{fmt(data.total_suspicious_amount)}</div>
-        </div>
-        <div style={{ ...card, flex: '1 1 180px', borderTop: '4px solid #6a1b9a' }}>
-          <div style={{ fontSize: 12, color: '#666' }}>{t('Flagged accounts', 'ಗುರುತಿಸಿದ ಖಾತೆಗಳು')}</div>
-          <div style={statVal}>{data.flagged_accounts}</div>
-        </div>
-        {data.pass_through_accounts && data.pass_through_accounts.length > 0 && (
-          <div style={{ ...card, flex: '1 1 180px', borderTop: '4px solid #ad1457' }}>
-            <div style={{ fontSize: 12, color: '#666' }}>{t('Pass-through accounts', 'ಹಣ ಹರಿದ ಖಾತೆಗಳು')}</div>
-            <div style={statVal}>{data.pass_through_accounts.length}</div>
-            <div style={{ fontSize: 11, color: '#999' }}>{t('layering indicator', 'ಪದರೀಕರಣ ಸೂಚಕ')}</div>
+        {periodFrom && (
+          <div style={{ textAlign: 'right', ...noteText }}>
+            <div><strong>{t('Period', 'ಅವಧಿ')}:</strong> {asOn(periodFrom)} &ndash; {asOn(periodTo)}</div>
+            <div>{data.suspicious_transaction_count} {t('flagged transactions', 'ಗುರುತಿಸಿದ ವಹಿವಾಟುಗಳು')}</div>
           </div>
         )}
       </div>
 
-      {/* Layering / pass-through: the actual finding. An account that both
-          receives and sends flagged money is a conduit, which is what
-          distinguishes a laundering chain from unrelated large transfers. A flat
-          transaction table hides this structure entirely. */}
-      {data.pass_through_accounts && data.pass_through_accounts.length > 0 && (
-        <div style={{ ...card, marginBottom: 20, borderLeft: '4px solid #c62828' }}>
-          <div style={cardTitle}>🕸️ {t('Layering Detected — Pass-Through Accounts', 'ಪದರೀಕರಣ ಪತ್ತೆ — ಹಣ ಹರಿದ ಖಾತೆಗಳು')}</div>
-          <div style={{ fontSize: 12, color: '#888', marginTop: -8, marginBottom: 12 }}>
-            {t('These accounts both received and forwarded flagged funds, so value moved through them rather than stopping there. Throughput is value sent divided by value received; near 1.0 indicates a conduit.',
-               'ಈ ಖಾತೆಗಳು ಹಣವನ್ನು ಸ್ವೀಕರಿಸಿ ಮುಂದೆ ಕಳುಹಿಸಿವೆ. 1.0ಕ್ಕೆ ಹತ್ತಿರವಿದ್ದರೆ ಅದು ಮಾಧ್ಯಮ ಖಾತೆ.')}
+      {/* Key figures */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        <div style={figure(GOV.breach)}>
+          <div style={figureLabel}>{t('Value under scrutiny', 'ಪರಿಶೀಲನೆಯ ಮೊತ್ತ')}</div>
+          <div style={{ ...figureValue, color: GOV.breach, fontSize: 22 }}>{inr(data.total_suspicious_amount)}</div>
+          <div style={figureSub}>
+            {t('across', 'ಒಟ್ಟು')} {data.suspicious_transaction_count} {t('transfers', 'ವರ್ಗಾವಣೆ')}
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {data.pass_through_accounts.map(p => (
-              <div key={p.account_id} style={{
-                display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
-                background: p.throughput_ratio >= 0.8 ? '#ffebee' : '#fff8e1',
-                border: '1px solid ' + (p.throughput_ratio >= 0.8 ? '#ffcdd2' : '#ffe082'),
-                borderRadius: 6, padding: '10px 12px',
-              }}>
-                <div style={{ minWidth: 170, fontWeight: 700 }}>
-                  👤 {localizePersonName(p.name, language)}
-                  <div style={{ fontSize: 11, fontWeight: 400, color: '#999' }}>{p.bank}</div>
-                </div>
-                {/* in -> out, so the direction of flow is legible at a glance */}
-                <div style={{ fontSize: 13, color: '#444' }}>
-                  <span style={{ color: '#2e7d32', fontWeight: 700 }}>▼ {fmt(p.received)}</span>
-                  <span style={{ color: '#999', margin: '0 8px' }}>{t('in', 'ಒಳಗೆ')}</span>
-                  <span style={{ color: '#c62828', fontWeight: 700 }}>▲ {fmt(p.sent)}</span>
-                  <span style={{ color: '#999', marginLeft: 8 }}>{t('out', 'ಹೊರಗೆ')}</span>
-                </div>
-                <div style={{
-                  background: '#fff', border: '1px solid #ddd', borderRadius: 12,
-                  padding: '2px 10px', fontSize: 12, fontWeight: 700,
-                }} title={p.signal}>
-                  {t('throughput', 'ಹರಿವು')} {p.throughput_ratio.toFixed(2)}
-                </div>
-                <div style={{ fontSize: 11.5, color: '#777', flex: 1 }}>
-                  {p.transactions} {t('flagged transactions', 'ಗುರುತಿಸಿದ ವಹಿವಾಟುಗಳು')} · {p.signal}
-                </div>
-              </div>
-            ))}
+        </div>
+        <div style={figure(GOV.navy)}>
+          <div style={figureLabel}>{t('Largest single transfer', 'ಅತಿ ದೊಡ್ಡ ವರ್ಗಾವಣೆ')}</div>
+          <div style={{ ...figureValue, fontSize: 22 }}>{inr(data.largest_transaction || 0)}</div>
+        </div>
+        <div style={figure(GOV.navy)}>
+          <div style={figureLabel}>{t('Accounts flagged', 'ಗುರುತಿಸಿದ ಖಾತೆಗಳು')}</div>
+          <div style={figureValue}>{data.flagged_accounts}</div>
+        </div>
+        {conduits.length > 0 && (
+          <div style={figure(GOV.critical)}>
+            <div style={figureLabel}>{t('Pass-through accounts', 'ಹಣ ಹರಿದ ಖಾತೆಗಳು')}</div>
+            <div style={{ ...figureValue, color: GOV.critical }}>{conduits.length}</div>
+            <div style={figureSub}>{t('layering indicator', 'ಪದರೀಕರಣ ಸೂಚಕ')}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Data provenance. Stated plainly rather than buried, because this module
+          does not read from the FIR system of record. */}
+      <div style={legalNote}>
+        <div>
+          <strong>{t('Data source', 'ದತ್ತಾಂಶ ಮೂಲ')}:</strong>{' '}
+          {t('Representative sample transaction data. In service this module integrates with bank and FIU-IND reporting feeds; the FIR system of record does not itself hold financial transactions.',
+             'ಮಾದರಿ ವಹಿವಾಟು ದತ್ತಾಂಶ. ಸೇವೆಯಲ್ಲಿ ಇದು ಬ್ಯಾಂಕ್ ಮತ್ತು FIU-IND ವರದಿಗಳೊಂದಿಗೆ ಸಂಯೋಜಿಸುತ್ತದೆ.')}
+        </div>
+        {data.analysis_note && (
+          <div style={{ marginTop: 5, color: GOV.muted }}>
+            <strong>{t('Method', 'ವಿಧಾನ')}:</strong> {data.analysis_note}
+          </div>
+        )}
+      </div>
+
+      {/* 1. Layering / pass-through: the actual finding. An account that both
+             receives and forwards flagged money is a conduit, which is what
+             distinguishes a laundering chain from unrelated large transfers. */}
+      {conduits.length > 0 && (
+        <div style={panel}>
+          <div style={panelHead}>
+            1. {t('Layering indicators — pass-through accounts', 'ಪದರೀಕರಣ ಸೂಚಕ — ಹಣ ಹರಿದ ಖಾತೆಗಳು')}
+          </div>
+          <div style={panelBody}>
+            <div style={{ ...noteText, marginBottom: 10 }}>
+              {t('These accounts both received and forwarded flagged funds, so value moved through them rather than terminating. Throughput is value sent divided by value received; at or near 1.00 the account acted as a conduit.',
+                 'ಈ ಖಾತೆಗಳು ಹಣವನ್ನು ಸ್ವೀಕರಿಸಿ ಮುಂದೆ ಕಳುಹಿಸಿವೆ. 1.00ಕ್ಕೆ ಹತ್ತಿರವಿದ್ದರೆ ಮಾಧ್ಯಮ ಖಾತೆ.')}
+            </div>
+            <div style={{ overflowX: 'auto', border: `1px solid ${GOV.rule}` }}>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>{t('Account holder', 'ಖಾತೆದಾರ')}</th>
+                    <th style={th}>{t('Bank', 'ಬ್ಯಾಂಕ್')}</th>
+                    <th style={th}>{t('Received', 'ಸ್ವೀಕೃತ')}</th>
+                    <th style={th}>{t('Forwarded', 'ಕಳುಹಿಸಿದೆ')}</th>
+                    <th style={th}>{t('Throughput', 'ಹರಿವು')}</th>
+                    <th style={th}>{t('Txns', 'ವಹಿವಾಟು')}</th>
+                    <th style={th}>{t('Assessment', 'ಮೌಲ್ಯಮಾಪನ')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conduits.map((p, i) => (
+                    <tr key={p.account_id} style={{ background: i % 2 ? GOV.panelAlt : '#fff' }}>
+                      <td style={{ ...td, fontWeight: 600 }}>{localizePersonName(p.name, language)}</td>
+                      <td style={td}>{p.bank}</td>
+                      <td style={{ ...tdNum, whiteSpace: 'nowrap' }}>{inr(p.received)}</td>
+                      <td style={{ ...tdNum, whiteSpace: 'nowrap' }}>{inr(p.sent)}</td>
+                      <td style={{
+                        ...tdNum, fontWeight: 700,
+                        color: p.throughput_ratio >= 0.8 ? GOV.breach : GOV.critical,
+                      }}>
+                        {p.throughput_ratio.toFixed(2)}
+                      </td>
+                      <td style={tdNum}>{p.transactions}</td>
+                      <td style={td}>
+                        <span style={p.throughput_ratio >= 0.8
+                          ? chip(GOV.breach, GOV.breachBg)
+                          : chip(GOV.warning, GOV.warningBg)}>
+                          {p.throughput_ratio >= 0.8
+                            ? t('Conduit', 'ಮಾಧ್ಯಮ') : t('Partial', 'ಭಾಗಶಃ')}
+                        </span>
+                        <div style={{ fontSize: 10.5, color: GOV.faint, marginTop: 3 }}>{p.signal}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Who moves the most money — the aggregate the table can't show. */}
+      {/* 2. Counterparty concentration */}
       {(data.top_receivers?.length || data.top_senders?.length) ? (
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 20 }}>
-          {([['📥', t('Top recipients of flagged funds', 'ಗುರುತಿಸಿದ ಹಣದ ಪ್ರಮುಖ ಸ್ವೀಕೃತದಾರರು'), data.top_receivers],
-             ['📤', t('Top senders of flagged funds', 'ಗುರುತಿಸಿದ ಹಣದ ಪ್ರಮುಖ ಕಳುಹಿಸುವವರು'), data.top_senders]] as const)
-            .map(([icon, title, list], idx) => (
-              list && list.length > 0 ? (
-                <div key={idx} style={{ ...card, flex: '1 1 320px' }}>
-                  <div style={cardTitle}>{icon} {title}</div>
-                  {list.map((a, i) => {
-                    const top = list[0].amount || 1;
-                    return (
-                      <div key={a.account_id} style={{ marginBottom: 9 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 3 }}>
-                          <span>{i + 1}. {localizePersonName(a.name, language)}
-                            <span style={{ color: '#999' }}> · {a.transactions} txn</span>
-                          </span>
-                          <strong>{fmt(a.amount)}</strong>
-                        </div>
-                        {/* Simple proportional bar: no chart dependency needed. */}
-                        <div style={{ height: 6, background: '#f0f0f0', borderRadius: 3 }}>
-                          <div style={{
-                            width: `${Math.max(3, (a.amount / top) * 100)}%`, height: '100%',
-                            background: idx === 0 ? '#c62828' : '#ff9800', borderRadius: 3,
-                          }} />
-                        </div>
-                      </div>
-                    );
-                  })}
+        <div style={panel}>
+          <div style={panelHead}>
+            2. {t('Counterparty concentration', 'ಪ್ರತಿಪಕ್ಷ ಕೇಂದ್ರೀಕರಣ')}
+          </div>
+          <div style={panelBody}>
+            <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+              {data.top_receivers && data.top_receivers.length > 0 && (
+                <div style={{ flex: '1 1 380px', minWidth: 330 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: GOV.navy, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 7 }}>
+                    {t('Principal recipients', 'ಪ್ರಮುಖ ಸ್ವೀಕೃತದಾರರು')}
+                  </div>
+                  <div style={{ border: `1px solid ${GOV.rule}` }}>
+                    {rankedList(data.top_receivers, GOV.breach)}
+                  </div>
                 </div>
-              ) : null
-            ))}
+              )}
+              {data.top_senders && data.top_senders.length > 0 && (
+                <div style={{ flex: '1 1 380px', minWidth: 330 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: GOV.navy, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 7 }}>
+                    {t('Principal remitters', 'ಪ್ರಮುಖ ಕಳುಹಿಸುವವರು')}
+                  </div>
+                  <div style={{ border: `1px solid ${GOV.rule}` }}>
+                    {rankedList(data.top_senders, GOV.critical)}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       ) : null}
 
-      <div style={card}>
-        <div style={cardTitle}>🔗 {t('Suspicious Money Trails', 'ಶಂಕಿತ ಹಣದ ಜಾಡುಗಳು')}</div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ background: '#f5f5f5', textAlign: 'left' }}>
-                <th style={th}>{t('From', 'ಇಂದ')}</th>
-                <th style={th}>{t('To', 'ಗೆ')}</th>
-                <th style={th}>{t('Amount', 'ಮೊತ್ತ')}</th>
-                <th style={th}>{t('Date', 'ದಿನಾಂಕ')}</th>
-                <th style={th}>{t('Linked Case', 'ಸಂಬಂಧಿತ ಪ್ರಕರಣ')}</th>
-                <th style={th}>{t('Why flagged', 'ಏಕೆ ಗುರುತಿಸಲಾಗಿದೆ')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.trails.map((tr, i) => (
-                <tr key={tr.id} style={{ borderBottom: '1px solid #eee', background: i % 2 ? '#fafafa' : '#fff' }}>
-                  <td style={td}>👤 {localizePersonName(tr.from.name, language)}<div style={{ fontSize: 11, color: '#999' }}>{tr.from.bank}</div></td>
-                  <td style={td}>👤 {localizePersonName(tr.to.name, language)}<div style={{ fontSize: 11, color: '#999' }}>{tr.to.bank}</div></td>
-                  <td style={{ ...td, fontWeight: 700, color: '#c62828' }}>{fmt(tr.amount)}</td>
-                  <td style={td}>{tr.date}</td>
-                  <td style={td}>
-                    {tr.linked_fir
-                      ? <span style={{ background: '#ffebee', color: '#c62828', padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>{tr.linked_fir} · {localizeCrimeType(tr.linked_crime_type || '', language)}</span>
-                      : <span style={{ color: '#999' }}>—</span>}
-                  </td>
-                  {/* Stated reasons, so a flagged row is auditable rather than
-                      asserted. Mirrors the explainability shown elsewhere. */}
-                  <td style={td}>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                      {(tr.reasons || []).map((r, ri) => (
-                        <span key={ri} style={{
-                          background: '#eceff1', color: '#37474f', padding: '2px 7px',
-                          borderRadius: 10, fontSize: 11,
-                        }}>{r}</span>
-                      ))}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* 3. The transaction register */}
+      <div style={panel}>
+        <div style={panelHead}>
+          3. {t('Register of flagged transactions', 'ಗುರುತಿಸಿದ ವಹಿವಾಟುಗಳ ನೋಂದಣಿ')}
         </div>
+        <div style={panelBody}>
+          <div style={{ ...noteText, marginBottom: 10 }}>
+            {t('Ordered by value. Grounds for flagging are recorded against each entry so it can be verified.',
+               'ಮೊತ್ತದ ಪ್ರಕಾರ ಜೋಡಿಸಲಾಗಿದೆ. ಪ್ರತಿ ನಮೂದಿಗೆ ಕಾರಣಗಳನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ.')}
+          </div>
+          <div style={{ overflowX: 'auto', border: `1px solid ${GOV.rule}` }}>
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={th}>{t('Date', 'ದಿನಾಂಕ')}</th>
+                  <th style={th}>{t('Remitter', 'ಕಳುಹಿಸಿದವರು')}</th>
+                  <th style={th}>{t('Beneficiary', 'ಸ್ವೀಕೃತದಾರ')}</th>
+                  <th style={th}>{t('Amount', 'ಮೊತ್ತ')}</th>
+                  <th style={th}>{t('Mode', 'ವಿಧಾನ')}</th>
+                  <th style={th}>{t('Linked case', 'ಸಂಬಂಧಿತ ಪ್ರಕರಣ')}</th>
+                  <th style={th}>{t('Grounds', 'ಕಾರಣಗಳು')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.trails.map((tr, i) => (
+                  <tr key={tr.id} style={{ background: i % 2 ? GOV.panelAlt : '#fff' }}>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{asOn(tr.date)}</td>
+                    <td style={td}>
+                      {localizePersonName(tr.from.name, language)}
+                      <div style={{ fontSize: 10.5, color: GOV.faint }}>{tr.from.bank}</div>
+                    </td>
+                    <td style={td}>
+                      {localizePersonName(tr.to.name, language)}
+                      <div style={{ fontSize: 10.5, color: GOV.faint }}>{tr.to.bank}</div>
+                    </td>
+                    <td style={{ ...tdNum, fontWeight: 700, color: GOV.breach, whiteSpace: 'nowrap' }}>
+                      {inr(tr.amount)}
+                    </td>
+                    <td style={{ ...td, color: GOV.muted }}>{tr.type || '\u2014'}</td>
+                    <td style={td}>
+                      {tr.linked_fir ? (
+                        <>
+                          <div style={{ ...mono, fontSize: 11.5 }}>{tr.linked_fir}</div>
+                          <div style={{ fontSize: 10.5, color: GOV.faint }}>
+                            {localizeCrimeType(tr.linked_crime_type || '', language)}
+                          </div>
+                        </>
+                      ) : <span style={{ color: GOV.faint }}>&mdash;</span>}
+                    </td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                        {(tr.reasons || []).map((r, ri) => (
+                          <span key={ri} style={chip(GOV.muted, '#eceef3')}>{r}</span>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ ...noteText, textAlign: 'center', paddingTop: 6 }}>
+        {t('Indicators support investigative prioritisation and do not by themselves establish an offence.',
+           'ಸೂಚಕಗಳು ತನಿಖೆಯ ಆದ್ಯತೆಗೆ ಸಹಾಯ ಮಾಡುತ್ತವೆ; ಸ್ವತಃ ಅಪರಾಧವನ್ನು ಸ್ಥಾಪಿಸುವುದಿಲ್ಲ.')}
       </div>
     </div>
   );
 };
-
-const card: React.CSSProperties = { backgroundColor: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: 18, boxShadow: '0 2px 8px rgba(0,0,0,0.06)' };
-const cardTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#1a237e', marginBottom: 12 };
-const statVal: React.CSSProperties = { fontSize: 26, fontWeight: 800, color: '#1a237e', marginTop: 4 };
-const th: React.CSSProperties = { padding: '8px 10px', fontSize: 12, fontWeight: 600, color: '#555', borderBottom: '2px solid #e0e0e0' };
-const td: React.CSSProperties = { padding: '8px 10px', verticalAlign: 'top' };
 
 export default FinanceView;
