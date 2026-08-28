@@ -66,9 +66,17 @@ def get_crime_detail(db: Session, fir_number: str) -> Optional[Dict[str, Any]]:
     fir = db.query(FIRDetails).filter(FIRDetails.crime_id == crime.id).first()
     links = db.query(CasePerson).filter(CasePerson.crime_id == crime.id).all()
 
+    # Fetch every linked person in ONE query rather than one per link. This is
+    # the hot path for CASE INVESTIGATION and the chat's "summarize this case",
+    # and a per-link lookup costs a network round-trip each against managed
+    # PostgreSQL.
+    person_ids = [l.person_id for l in links if l.person_id]
+    people = {p.id: p for p in db.query(Person).filter(Person.id.in_(person_ids))} \
+        if person_ids else {}
+
     people_by_role: Dict[str, List[Dict[str, Any]]] = {}
     for link in links:
-        person = db.query(Person).get(link.person_id)
+        person = people.get(link.person_id)
         if person:
             people_by_role.setdefault(link.role, []).append(_person_brief(person))
 

@@ -171,14 +171,17 @@ def compute_risk(db: Session, person_id: int) -> Dict[str, Any]:
     ).all()
     n_cases = len(links)
 
+    # One query for every linked crime rather than one per link: compute_risk is
+    # called per offender, so a per-link lookup multiplies round-trips fast.
+    crime_ids = [l.crime_id for l in links if l.crime_id]
     crime_types = []
     latest_year = 0
-    for l in links:
-        crime = db.query(Crime).get(l.crime_id)
-        if crime:
-            crime_types.append(crime.crime_type)
-            if crime.date_occurred:
-                latest_year = max(latest_year, crime.date_occurred.year)
+    if crime_ids:
+        for ctype, occurred in db.query(Crime.crime_type, Crime.date_occurred) \
+                                 .filter(Crime.id.in_(crime_ids)):
+            crime_types.append(ctype)
+            if occurred:
+                latest_year = max(latest_year, occurred.year)
 
     severity_total = sum(SEVERITY.get(ct, 3) for ct in crime_types)
     is_gang = db.query(GangMember).filter(GangMember.person_id == person_id).count() > 0
@@ -313,21 +316,21 @@ async def offender_profile(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Detailed behavioural profile of an offender (Area 5)."""
-    p = db.query(Person).get(person_id)
+    p = db.get(Person, person_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
 
     risk = compute_risk(db, person_id)
 
-    # Case history
+    # Case history, bulk-loaded in one query instead of one per link.
     links = db.query(CasePerson).filter(
         CasePerson.person_id == person_id, CasePerson.role == "accused"
     ).all()
+    crime_ids = [l.crime_id for l in links if l.crime_id]
     cases = []
     crime_types = []
-    for l in links:
-        crime = db.query(Crime).get(l.crime_id)
-        if crime:
+    if crime_ids:
+        for crime in db.query(Crime).filter(Crime.id.in_(crime_ids)):
             crime_types.append(crime.crime_type)
             cases.append({
                 "fir_number": crime.fir_number, "crime_type": crime.crime_type,
@@ -335,12 +338,16 @@ async def offender_profile(
             })
     cases.sort(key=lambda c: c["date"], reverse=True)
 
-    # Gang affiliations
-    gangs = []
-    for gm in db.query(GangMember).filter(GangMember.person_id == person_id).all():
-        g = db.query(Gang).get(gm.gang_id)
-        if g:
-            gangs.append({"gang": g.name, "role": gm.role, "activity": g.primary_activity})
+    # Gang affiliations, likewise resolved in a single query.
+    memberships = db.query(GangMember).filter(GangMember.person_id == person_id).all()
+    gang_ids = [gm.gang_id for gm in memberships if gm.gang_id]
+    gang_map = {g.id: g for g in db.query(Gang).filter(Gang.id.in_(gang_ids))} \
+        if gang_ids else {}
+    gangs = [
+        {"gang": gang_map[gm.gang_id].name, "role": gm.role,
+         "activity": gang_map[gm.gang_id].primary_activity}
+        for gm in memberships if gm.gang_id in gang_map
+    ]
 
     # Behavioural summary
     mo = Counter(crime_types)

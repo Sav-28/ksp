@@ -54,16 +54,21 @@ async def get_person_detail(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Full profile for a person: demographics, cases, gangs, associates, accounts."""
-    person = db.query(Person).get(person_id)
+    person = db.get(Person, person_id)
     if not person:
         raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
 
-    # Cases this person is involved in
+    # Cases this person is involved in. Crimes are loaded in one query keyed by
+    # id; previously each link triggered its own lookup, which is a network
+    # round-trip per case against managed PostgreSQL.
     links = db.query(CasePerson).filter(CasePerson.person_id == person_id).all()
+    crime_ids = [l.crime_id for l in links if l.crime_id]
+    crimes = {c.id: c for c in db.query(Crime).filter(Crime.id.in_(crime_ids))} \
+        if crime_ids else {}
     cases = []
     accused_count = 0
     for link in links:
-        crime = db.query(Crime).get(link.crime_id)
+        crime = crimes.get(link.crime_id)
         if crime:
             cases.append({
                 "fir_number": crime.fir_number,
@@ -75,21 +80,33 @@ async def get_person_detail(
             if link.role == "accused":
                 accused_count += 1
 
-    # Gang memberships
-    gangs = []
-    for gm in db.query(GangMember).filter(GangMember.person_id == person_id).all():
-        gang = db.query(Gang).get(gm.gang_id)
-        if gang:
-            gangs.append({"gang": gang.name, "role": gm.role, "activity": gang.primary_activity})
+    # Gang memberships, joined in a single query instead of one per membership.
+    memberships = db.query(GangMember).filter(GangMember.person_id == person_id).all()
+    gang_ids = [gm.gang_id for gm in memberships if gm.gang_id]
+    gang_map = {g.id: g for g in db.query(Gang).filter(Gang.id.in_(gang_ids))} \
+        if gang_ids else {}
+    gangs = [
+        {"gang": gang_map[gm.gang_id].name, "role": gm.role,
+         "activity": gang_map[gm.gang_id].primary_activity}
+        for gm in memberships if gm.gang_id in gang_map
+    ]
 
-    # Known associates (relationship edges)
+    # Known associates (relationship edges). The previous list comprehension
+    # queried each associate TWICE - once in the `if` guard and once to build the
+    # value - so a person with 10 associates cost 20 round-trips.
     associate_ids = set()
     for rel in db.query(Relationship).filter(
         (Relationship.person_a_id == person_id) | (Relationship.person_b_id == person_id)
     ).all():
         other = rel.person_b_id if rel.person_a_id == person_id else rel.person_a_id
-        associate_ids.add(other)
-    associates = [_person_brief(db.query(Person).get(pid)) for pid in associate_ids if db.query(Person).get(pid)]
+        if other:
+            associate_ids.add(other)
+    associates = [
+        _person_brief(p) for p in (
+            db.query(Person).filter(Person.id.in_(associate_ids)).all()
+            if associate_ids else []
+        )
+    ]
 
     # Financial accounts
     accounts = [{
