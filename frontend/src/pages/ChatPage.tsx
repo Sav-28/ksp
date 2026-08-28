@@ -9,6 +9,7 @@ import InsightsView from '../components/InsightsView';
 import ProfilesView from '../components/ProfilesView';
 import FinanceView from '../components/FinanceView';
 import ForecastView from '../components/ForecastView';
+import ComplianceView from '../components/ComplianceView';
 import AuditView from '../components/AuditView';
 import CaseInvestigationView from '../components/CaseInvestigationView';
 import RegisterFIRView from '../components/RegisterFIRView';
@@ -23,7 +24,7 @@ import {
 // "KSP" text badge if the image can't load.
 const KARNATAKA_EMBLEM_URL = 'https://commons.wikimedia.org/wiki/Special:FilePath/Seal%20of%20Karnataka.png?width=140';
 
-type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'investigation' | 'register' | 'audit';
+type ViewType = 'chat' | 'dashboard' | 'network' | 'hotspots' | 'insights' | 'profiles' | 'finance' | 'forecast' | 'compliance' | 'investigation' | 'register' | 'audit';
 
 // Shared data types
 interface CrimeRecord {
@@ -144,6 +145,7 @@ const NAV_TABS: { en: string; kn: string }[] = [
   { en: 'PROFILES', kn: 'ಪ್ರೊಫೈಲ್' },
   { en: 'FINANCE', kn: 'ಹಣಕಾಸು' },
   { en: 'FORECAST', kn: 'ಮುನ್ಸೂಚನೆ' },
+  { en: 'COMPLIANCE', kn: 'ಅನುಸರಣೆ' },
   { en: 'CASE INVESTIGATION', kn: 'ಪ್ರಕರಣ ತನಿಖೆ' },
   { en: 'REGISTER FIR', kn: 'FIR ನೋಂದಣಿ' },
   { en: 'AUDIT', kn: 'ಲೆಕ್ಕಪರಿಶೋಧನೆ' },
@@ -151,18 +153,21 @@ const NAV_TABS: { en: string; kn: string }[] = [
 
 // Role-based access control (Area 10): which tabs each role may see.
 const ROLE_TABS: Record<string, string[]> = {
-  investigator: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'PROFILES', 'CASE INVESTIGATION', 'REGISTER FIR'],
-  analyst: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST'],
-  supervisor: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
-  policymaker: ['AI ASSISTANT', 'DASHBOARD', 'MAP', 'INSIGHTS', 'FORECAST'],
+  // COMPLIANCE is operational: investigators track their own custody deadlines,
+  // supervisors review station disposal, and policymakers care about pendency.
+  investigator: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'PROFILES', 'COMPLIANCE', 'CASE INVESTIGATION', 'REGISTER FIR'],
+  analyst: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'COMPLIANCE'],
+  supervisor: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'COMPLIANCE', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
+  policymaker: ['AI ASSISTANT', 'DASHBOARD', 'MAP', 'INSIGHTS', 'FORECAST', 'COMPLIANCE'],
   // Backward-compatible legacy roles:
-  admin: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
-  officer: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'CASE INVESTIGATION', 'REGISTER FIR'],
+  admin: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'COMPLIANCE', 'CASE INVESTIGATION', 'REGISTER FIR', 'AUDIT'],
+  officer: ['AI ASSISTANT', 'DASHBOARD', 'NETWORK', 'MAP', 'INSIGHTS', 'PROFILES', 'FINANCE', 'FORECAST', 'COMPLIANCE', 'CASE INVESTIGATION', 'REGISTER FIR'],
 };
 
 const VIEW_TO_TAB: Record<string, string> = {
   chat: 'AI ASSISTANT', dashboard: 'DASHBOARD', network: 'NETWORK', hotspots: 'MAP',
   insights: 'INSIGHTS', profiles: 'PROFILES', finance: 'FINANCE', forecast: 'FORECAST',
+  compliance: 'COMPLIANCE',
   investigation: 'CASE INVESTIGATION', register: 'REGISTER FIR', audit: 'AUDIT',
 };
 
@@ -200,6 +205,8 @@ const GovHeader = ({
       onNavigate('finance');
     } else if (menuItem === 'FORECAST') {
       onNavigate('forecast');
+    } else if (menuItem === 'COMPLIANCE') {
+      onNavigate('compliance');
     } else if (menuItem === 'REGISTER FIR') {
       onNavigate('register');
     } else if (menuItem === 'AUDIT') {
@@ -1582,6 +1589,13 @@ const ChatPage: React.FC = () => {
       {currentView === 'forecast' && (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
           <ForecastView language={currentLanguage} />
+        </div>
+      )}
+
+      {/* Compliance view — statutory custody deadlines and pendency */}
+      {currentView === 'compliance' && (
+        <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#f6f7f9' }}>
+          <ComplianceView language={currentLanguage} />
         </div>
       )}
 

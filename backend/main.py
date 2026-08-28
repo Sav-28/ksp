@@ -37,6 +37,7 @@ from src.api.routes.casework import router as casework_router
 from src.api.routes.crimes import router as crimes_router
 from src.api.routes.anomaly import router as anomaly_router
 from src.api.routes.system import router as system_router
+from src.api.routes.compliance import router as compliance_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -164,6 +165,7 @@ app.include_router(casework_router, prefix="/api")
 app.include_router(crimes_router, prefix="/api")
 app.include_router(anomaly_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
+app.include_router(compliance_router, prefix="/api")
 
 
 @app.get("/health")

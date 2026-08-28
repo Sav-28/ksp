@@ -418,10 +418,22 @@ def main():
                     arrest_counter += 1
                     # Roughly 1 in 8 events is a voluntary surrender, else arrest.
                     as_type = 2 if random.random() < 0.12 else 1
+                    # Arrest follows registration by a short investigative lag
+                    # rather than landing on the FIR date itself. This matters:
+                    # the BNSS custody clock (60/90 days to file a chargesheet)
+                    # runs from the date of arrest, so reusing the FIR date would
+                    # systematically overstate how much time has elapsed.
+                    base_date = fir.filed_date or c.date_occurred
+                    arrest_date = base_date
+                    if base_date:
+                        arrest_date = base_date + timedelta(days=random.randint(0, 21))
+                        # Never place an arrest in the future.
+                        if arrest_date > date.today():
+                            arrest_date = base_date
                     db.add(F.ArrestSurrender(
                         ArrestSurrenderID=arrest_counter, CaseMasterID=cm_id,
                         ArrestSurrenderTypeID=as_type,
-                        ArrestSurrenderDate=fir.filed_date or c.date_occurred,
+                        ArrestSurrenderDate=arrest_date,
                         ArrestSurrenderStateId=KARNATAKA_STATE_ID,
                         ArrestSurrenderDistrictId=item["did"] or None,
                         PoliceStationID=item["uid"] or None,

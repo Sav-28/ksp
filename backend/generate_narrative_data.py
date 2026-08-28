@@ -242,14 +242,39 @@ def add_crime(db, crime_type, district, when, station=None, desc=None):
     return c
 
 
+# Share of still-under-investigation cases where an accused has been arrested but
+# the chargesheet has NOT yet been filed. This population is the whole point of
+# custody-clock monitoring: under BNSS s.187(3) the chargesheet must be filed
+# within 60 days (90 for graver offences) of the accused first being remanded, or
+# the accused becomes entitled to default bail.
+#
+# Previously arrest_made was true only for "Chargesheet Filed" and "Convicted",
+# i.e. an arrest always implied a chargesheet already existed. That made the most
+# important operational pressure in a police station impossible to represent.
+ARRESTED_PENDING_CHARGESHEET_RATE = 0.45
+
+
 def add_fir(db, crime, status=None):
     status = status or random.choices(STATUSES, weights=[15, 30, 20, 15, 12, 8])[0]
     filed = crime.date_occurred + timedelta(days=random.randint(0, 3))
     closed = filed + timedelta(days=random.randint(20, 300)) if status in ("Closed", "Convicted", "Acquitted") else None
+    # An arrest exists once a chargesheet is filed, and for a realistic share of
+    # cases still under investigation. The under-investigation case is restricted
+    # to RECENT filings on purpose: on an old case the accused would already have
+    # been chargesheeted or released on default bail, so a station does not
+    # accumulate years of arrested-but-not-chargesheeted cases. Keeping the
+    # custody clock to live cases is both realistic and what makes the monitor
+    # show a usable spread across the 60- and 90-day thresholds.
+    days_since_filed = (TODAY - filed).days
+    arrest_made = status in ("Chargesheet Filed", "Convicted") or (
+        status == "Under Investigation"
+        and days_since_filed <= 150
+        and random.random() < ARRESTED_PENDING_CHARGESHEET_RATE
+    )
     db.add(FIRDetails(crime_id=crime.id, investigation_status=status,
                       investigating_officer=random.choice(IO_NAMES),
                       ipc_sections=IPC_BY_TYPE.get(crime.crime_type, "000"),
-                      arrest_made=status in ("Chargesheet Filed", "Convicted"),
+                      arrest_made=arrest_made,
                       case_outcome=OUTCOMES[status],
                       court_status="In Trial" if status == "Chargesheet Filed" else ("Disposed" if closed else "—"),
                       filed_date=filed, closed_date=closed))
