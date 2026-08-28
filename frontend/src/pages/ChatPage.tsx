@@ -1546,7 +1546,7 @@ const ChatPage: React.FC = () => {
       {/* Dashboard view */}
       {currentView === 'dashboard' && (
         <div style={{ flex: 1, overflowY: 'auto', backgroundColor: '#fafafa' }}>
-          <Dashboard language={currentLanguage} />
+          <Dashboard language={currentLanguage} onNavigate={setCurrentView} />
         </div>
       )}
 
