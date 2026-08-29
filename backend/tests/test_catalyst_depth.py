@@ -376,6 +376,55 @@ def test_jobs_listing_names_the_missing_prerequisites(monkeypatch):
     assert "MISSING" in body["prerequisites"]["jobpool"]
 
 
+# --- 4d. Mail is evidence-based, not configuration-based --------------------
+def test_mail_is_not_reported_live_just_because_the_env_vars_are_set(monkeypatch):
+    """
+    The commonest Mail failure is an unverified from_email, which only shows up
+    when a send is attempted. Env vars being present is not evidence.
+    """
+    monkeypatch.setenv("MAIL_FROM", "someone@example.com")
+    monkeypatch.setenv("KSP_DIGEST_TO", "someone@example.com")
+    from src.services import catalyst
+
+    catalyst._state["mail_ok_once"] = False
+    catalyst._state["last_mail_error"] = None
+    entry = _entry("Mail")
+    assert entry["status"] == "configured"
+    assert "no send has been attempted" in entry["detail"]
+
+
+def test_a_rejected_send_is_reported_rather_than_hidden(monkeypatch):
+    monkeypatch.setenv("MAIL_FROM", "someone@example.com")
+    monkeypatch.setenv("KSP_DIGEST_TO", "someone@example.com")
+    from src.services import catalyst
+
+    catalyst._state["mail_ok_once"] = False
+    catalyst._state["last_mail_error"] = "CatalystMailError: sender not verified"
+    entry = _entry("Mail")
+    assert entry["status"] == "not-configured"
+    assert "sender not verified" in entry["detail"]
+    catalyst._state["last_mail_error"] = None
+
+
+def test_send_mail_records_why_it_could_not_send(monkeypatch):
+    from src.services import catalyst
+
+    monkeypatch.delenv("MAIL_FROM", raising=False)
+    r = catalyst.send_mail("s", "c", ["a@b.com"])
+    assert r["sent"] is False and "MAIL_FROM" in r["reason"]
+
+    monkeypatch.setenv("MAIL_FROM", "a@b.com")
+    r = catalyst.send_mail("s", "c", [])
+    assert r["sent"] is False and "recipient" in r["reason"]
+
+    # Off-platform the SDK cannot initialise, and that reason must be recorded
+    # for the inventory rather than swallowed.
+    r = catalyst.send_mail("s", "c", ["a@b.com"])
+    assert r["sent"] is False
+    assert catalyst.diagnostics()["last_mail_error"]
+    catalyst._state["last_mail_error"] = None
+
+
 # --- 5. Narrative analysis ---------------------------------------------------
 # A realistic statement, containing the things a real one does: an offence, a
 # district, a person, a vehicle, a valuable and an amount.

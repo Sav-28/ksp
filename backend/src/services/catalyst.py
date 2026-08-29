@@ -118,6 +118,8 @@ _state: Dict[str, Any] = {
     "zia_ok_once": False,     # has a Zia call EVER returned in this process
     "last_job_error": None,
     "jobs_ok_once": False,
+    "last_mail_error": None,
+    "mail_ok_once": False,
 }
 
 
@@ -530,8 +532,10 @@ def send_mail(subject: str, content: str, to: List[str],
         return {"sent": False, "reason": "no recipient configured"}
     app = get_app()
     if app is None:
-        return {"sent": False,
-                "reason": f"Catalyst SDK not initialised ({_state['last_init_error'] or 'no credentials in scope'})"}
+        reason = (f"Catalyst SDK not initialised "
+                  f"({_state['last_init_error'] or 'no credentials in scope'})")
+        _state["last_mail_error"] = reason
+        return {"sent": False, "reason": reason}
     try:
         app.email().send_mail({
             "from_email": sender,
@@ -541,9 +545,20 @@ def send_mail(subject: str, content: str, to: List[str],
             "html_mode": html,
             "display_name": display_name,
         })
+        _state["last_mail_error"] = None
+        _state["mail_ok_once"] = True
         return {"sent": True, "reason": None}
     except Exception as exc:
-        return {"sent": False, "reason": f"{type(exc).__name__}: {exc}"}
+        # Recorded so the inventory can report Mail as broken rather than
+        # "configured". The commonest cause is a from_email that has not been
+        # verified in the Catalyst console, and the API says so in this message.
+        _state["last_mail_error"] = f"{type(exc).__name__}: {exc}"[:400]
+        return {"sent": False, "reason": _state["last_mail_error"]}
+
+
+def mail_used_successfully() -> bool:
+    """Whether a message has actually been accepted for delivery in this process."""
+    return bool(_state.get("mail_ok_once"))
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +579,8 @@ def diagnostics() -> Dict[str, Any]:
         "last_zia_error": _state["last_zia_error"],
         "job_scheduling_succeeded_at_least_once": _state["jobs_ok_once"],
         "last_job_error": _state["last_job_error"],
+        "mail_succeeded_at_least_once": _state["mail_ok_once"],
+        "last_mail_error": _state["last_mail_error"],
         "appsail_target_id_present": bool(appsail_target_id()),
         # Presence and age only - the header values are credentials.
         "gateway_headers_captured": captures,

@@ -159,18 +159,42 @@ def _job_scheduling_status() -> tuple:
 
 
 def _mail_status() -> tuple:
+    """
+    (status, detail) for Mail.
+
+    Evidence-based like Stratus and Zia. Env vars being set is NOT enough: the
+    commonest Mail failure is a from_email that has not been verified in the
+    Catalyst console, and that only shows up when a send is attempted. Reporting
+    "configured" while every send is rejected would be exactly the kind of
+    overstatement this endpoint exists to prevent.
+    """
+    diag = catalyst.diagnostics()
     if not os.getenv("MAIL_FROM", "").strip():
         return ("not-configured",
                 "MAIL_FROM is not set, so the custody-clock digest renders and "
-                "returns a preview instead of sending. Set MAIL_FROM and "
-                "KSP_DIGEST_TO to enable delivery.")
+                "returns a preview instead of sending. Set MAIL_FROM to a sender "
+                "address verified in the Catalyst console, plus KSP_DIGEST_TO, to "
+                "enable delivery.")
     if not os.getenv("KSP_DIGEST_TO", "").strip():
         return ("not-configured",
                 "MAIL_FROM is set but KSP_DIGEST_TO has no recipient, so the "
                 "digest returns a preview.")
+    if diag.get("mail_succeeded_at_least_once"):
+        return ("live",
+                "The custody-clock digest has been accepted for delivery by "
+                "Catalyst Mail in this instance. A scheduled job calls "
+                "/api/compliance/digest?send=true so it arrives before the "
+                "morning briefing.")
+    if diag.get("last_mail_error"):
+        return ("not-configured",
+                f"Sender and recipient are set but the last send was rejected: "
+                f"{diag['last_mail_error']} The digest still renders and is "
+                f"returned as a preview. A rejection usually means from_email is "
+                f"not a verified sender in the Catalyst console.")
     return ("configured",
-            "Sender and recipient are set; the digest endpoint will attempt "
-            "delivery and reports the outcome.")
+            "Sender and recipient are set, but no send has been attempted yet in "
+            "this instance. Call /api/compliance/digest?send=true and this entry "
+            "will report what actually happened.")
 
 
 def _filestore_status() -> tuple:
