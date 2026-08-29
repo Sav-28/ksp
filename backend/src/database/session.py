@@ -8,24 +8,39 @@ from sqlalchemy.pool import StaticPool
 import os
 from typing import Generator
 
-# Database URL - can be overridden by environment variable
-# For development, using SQLite for simplicity
-# In production, use PostgreSQL as mentioned in README
+# Database URL — override via environment for production.
+#   dev  : SQLite (default, zero setup)
+#   prod : PostgreSQL — persistent and shared across app instances
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./ksp_crime_ai.db"  # SQLite for development
 )
 
-# For SQLite, we need special settings
+# Managed providers (Heroku, Neon, Supabase, Render) often hand out a
+# "postgres://" URL, which SQLAlchemy 2.x no longer accepts. Normalize it so a
+# copy-pasted connection string works without editing.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 if DATABASE_URL.startswith("sqlite"):
+    # SQLite needs cross-thread access for FastAPI's threadpool.
     engine = create_engine(
         DATABASE_URL,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
 else:
-    # For PostgreSQL and other databases
-    engine = create_engine(DATABASE_URL)
+    # PostgreSQL / other servers. Managed databases silently close idle
+    # connections, which surfaces as "server closed the connection
+    # unexpectedly" on the next request — pool_pre_ping checks liveness and
+    # pool_recycle retires connections before the provider drops them.
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,
+        pool_recycle=int(os.getenv("KSP_DB_POOL_RECYCLE", "280")),
+        pool_size=int(os.getenv("KSP_DB_POOL_SIZE", "5")),
+        max_overflow=int(os.getenv("KSP_DB_MAX_OVERFLOW", "10")),
+    )
 
 # Session maker
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -62,17 +77,23 @@ def _ensure_columns():
     """Lightweight, idempotent migration: add columns introduced after the
     initial schema to an existing database. SQLAlchemy's create_all only
     creates missing *tables*, not missing *columns*, so we add them by hand.
-    Safe to run on every startup — a duplicate-column error is ignored."""
+    Safe to run on every startup — a duplicate-column error is ignored.
+    Uses portable types so it works on SQLite and PostgreSQL alike."""
     from sqlalchemy import text
+    is_pg = engine.dialect.name.startswith("postgres")
+    ts = "TIMESTAMP" if is_pg else "DATETIME"
+    # PostgreSQL supports IF NOT EXISTS, which avoids relying on error swallowing.
+    guard = "IF NOT EXISTS " if is_pg else ""
     additive = [
         ("crimes", "created_by", "VARCHAR(100)"),
-        ("crimes", "created_at", "DATETIME"),
+        ("crimes", "created_at", ts),
         ("persons", "photo", "TEXT"),
     ]
     for table, column, coltype in additive:
         try:
             with engine.begin() as conn:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
+                conn.execute(text(
+                    f"ALTER TABLE {table} ADD COLUMN {guard}{column} {coltype}"))
         except Exception:
             # Column already exists (or table missing) — nothing to do.
             pass
@@ -84,21 +105,21 @@ def _ensure_columns():
 # query: readers select FROM v_crimes instead of the old crimes table.
 _V_CRIMES_SQL = """
 CREATE VIEW v_crimes AS
-SELECT cm.CaseMasterID          AS id,
-       cm.CrimeNo               AS fir_number,
-       cm.CrimeRegisteredDate   AS date_occurred,
-       d.DistrictName           AS district,
-       d.DistrictName           AS taluk,
-       u.UnitName               AS police_station,
-       sh.CrimeHeadName         AS crime_type,
-       io.BriefFacts            AS description,
-       io.latitude              AS latitude,
-       io.longitude             AS longitude
-FROM CaseMaster cm
-LEFT JOIN CrimeSubHead sh     ON sh.CrimeSubHeadID = cm.CrimeMinorHeadID
-LEFT JOIN Unit u              ON u.UnitID          = cm.PoliceStationID
-LEFT JOIN District d          ON d.DistrictID      = u.DistrictID
-LEFT JOIN Inv_OccuranceTime io ON io.CaseMasterID  = cm.CaseMasterID
+SELECT cm."CaseMasterID"          AS id,
+       cm."CrimeNo"               AS fir_number,
+       cm."CrimeRegisteredDate"   AS date_occurred,
+       d."DistrictName"           AS district,
+       d."DistrictName"           AS taluk,
+       u."UnitName"               AS police_station,
+       sh."CrimeHeadName"         AS crime_type,
+       io."BriefFacts"            AS description,
+       io.latitude                AS latitude,
+       io.longitude               AS longitude
+FROM "CaseMaster" cm
+LEFT JOIN "CrimeSubHead" sh      ON sh."CrimeSubHeadID" = cm."CrimeMinorHeadID"
+LEFT JOIN "Unit" u               ON u."UnitID"          = cm."PoliceStationID"
+LEFT JOIN "District" d           ON d."DistrictID"      = u."DistrictID"
+LEFT JOIN "Inv_OccuranceTime" io ON io."CaseMasterID"   = cm."CaseMasterID"
 """
 
 

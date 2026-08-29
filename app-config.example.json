@@ -1,0 +1,14 @@
+{
+	"_comment": "TEMPLATE. Copy to app-config.json and fill in real values. app-config.json is gitignored because env_variables carries secrets (database password, token signing key) and this repository is public. Values set in the Catalyst console override these after deploy.",
+	"command": "python3 -u main.py",
+	"build_path": "./backend",
+	"stack": "python_3_11",
+	"env_variables": {
+		"DATABASE_URL": "postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require",
+		"KSP_NLP_PROVIDER": "rules",
+		"KSP_AUTOSEED": "false",
+		"KSP_SECRET_KEY": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+	},
+	"memory": 512,
+	"scripts": {}
+}

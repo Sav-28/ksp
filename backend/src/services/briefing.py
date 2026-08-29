@@ -25,52 +25,72 @@ from src.ai import ollama_client
 # ---------------------------------------------------------------------------
 def gather_person_facts(db: Session, person_id: int) -> Optional[Dict[str, Any]]:
     """Collect every linked fact about a person into a structured dict."""
-    person = db.query(Person).get(person_id)
+    person = db.get(Person, person_id)
     if not person:
         return None
 
     risk = compute_risk(db, person_id)
 
-    # Case history (as accused)
+    # Case history (as accused). Crimes and their FIR details are each fetched in
+    # a single query; previously every link cost two lookups, so a 10-case
+    # offender meant 20 round-trips before the associates loop even started.
     links = db.query(CasePerson).filter(
         CasePerson.person_id == person_id, CasePerson.role == "accused"
     ).all()
+    link_crime_ids = [l.crime_id for l in links if l.crime_id]
+    crime_rows = db.query(Crime).filter(Crime.id.in_(link_crime_ids)).all() \
+        if link_crime_ids else []
+    firs = {f.crime_id: f for f in db.query(FIRDetails)
+            .filter(FIRDetails.crime_id.in_(link_crime_ids))} if link_crime_ids else {}
+
     cases = []
     crime_ids = []
-    for l in links:
-        c = db.query(Crime).get(l.crime_id)
-        if c:
-            crime_ids.append(c.id)
-            fir = db.query(FIRDetails).filter(FIRDetails.crime_id == c.id).first()
-            cases.append({
-                "fir": c.fir_number, "crime_type": c.crime_type, "district": c.district,
-                "date": str(c.date_occurred), "description": c.description,
-                "status": fir.investigation_status if fir else None,
-                "outcome": fir.case_outcome if fir else None,
-            })
+    for c in crime_rows:
+        crime_ids.append(c.id)
+        fir = firs.get(c.id)
+        cases.append({
+            "fir": c.fir_number, "crime_type": c.crime_type, "district": c.district,
+            "date": str(c.date_occurred), "description": c.description,
+            "status": fir.investigation_status if fir else None,
+            "outcome": fir.case_outcome if fir else None,
+        })
     cases.sort(key=lambda c: c["date"])
 
-    # Gang affiliations
-    gangs = []
-    for gm in db.query(GangMember).filter(GangMember.person_id == person_id).all():
-        g = db.query(Gang).get(gm.gang_id)
-        if g:
-            gangs.append({"name": g.name, "role": gm.role, "activity": g.primary_activity,
-                          "base_district": g.base_district})
+    # Gang affiliations, resolved in one query.
+    memberships = db.query(GangMember).filter(GangMember.person_id == person_id).all()
+    gang_ids = [gm.gang_id for gm in memberships if gm.gang_id]
+    gang_map = {g.id: g for g in db.query(Gang).filter(Gang.id.in_(gang_ids))} \
+        if gang_ids else {}
+    gangs = [
+        {"name": gang_map[gm.gang_id].name, "role": gm.role,
+         "activity": gang_map[gm.gang_id].primary_activity,
+         "base_district": gang_map[gm.gang_id].base_district}
+        for gm in memberships if gm.gang_id in gang_map
+    ]
 
-    # Known associates (network)
+    # Known associates (network). This was the worst offender: a lookup for each
+    # associate PLUS a COUNT query inside the same loop, so 10 associates cost 20
+    # round-trips. Both are now single queries, with the case counts aggregated
+    # by the database via GROUP BY.
     assoc_ids = set()
     for r in db.query(Relationship).filter(
         (Relationship.person_a_id == person_id) | (Relationship.person_b_id == person_id)
     ).all():
-        assoc_ids.add(r.person_b_id if r.person_a_id == person_id else r.person_a_id)
+        other = r.person_b_id if r.person_a_id == person_id else r.person_a_id
+        if other:
+            assoc_ids.add(other)
+    top_assoc = list(assoc_ids)[:10]
     associates = []
-    for aid in list(assoc_ids)[:10]:
-        ap = db.query(Person).get(aid)
-        if ap:
-            n_cases = db.query(CasePerson).filter(
-                CasePerson.person_id == aid, CasePerson.role == "accused").count()
-            associates.append({"name": ap.full_name, "district": ap.district, "cases": n_cases})
+    if top_assoc:
+        case_counts = dict(
+            db.query(CasePerson.person_id, func.count(CasePerson.id))
+              .filter(CasePerson.person_id.in_(top_assoc),
+                      CasePerson.role == "accused")
+              .group_by(CasePerson.person_id).all()
+        )
+        for ap in db.query(Person).filter(Person.id.in_(top_assoc)):
+            associates.append({"name": ap.full_name, "district": ap.district,
+                               "cases": case_counts.get(ap.id, 0)})
 
     # Financial trails
     accounts = db.query(FinancialAccount).filter(FinancialAccount.person_id == person_id).all()

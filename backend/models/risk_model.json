@@ -13,82 +13,82 @@
     "recent_activity"
   ],
   "mean": [
-    42.893939,
-    0.755682,
-    1.439394,
-    2.418561,
-    0.045455,
-    5.065974,
-    5.75947,
-    0.706439,
-    0.929924
+    42.922222,
+    0.761111,
+    1.401852,
+    2.42963,
+    0.038889,
+    4.903669,
+    5.637037,
+    0.705556,
+    0.951852
   ],
   "std": [
-    15.074817,
-    0.429682,
-    1.230962,
-    1.418558,
-    0.208299,
-    1.710436,
-    2.149019,
-    0.455393,
-    0.255275
+    15.177025,
+    0.426405,
+    1.241115,
+    1.436512,
+    0.19333,
+    1.735449,
+    2.260309,
+    0.455793,
+    0.214079
   ],
   "coef": [
-    -0.003428,
-    0.048413,
-    0.146328,
-    0.058747,
-    0.360893,
-    -4.814808,
-    5.928355,
-    -0.016802,
-    0.96064
+    -0.005549,
+    -0.086328,
+    0.083486,
+    -0.04913,
+    0.132236,
+    -4.70457,
+    6.208479,
+    -0.087198,
+    0.773224
   ],
-  "intercept": 0.459821,
-  "n_samples": 661,
-  "test_size": 133,
-  "repeat_rate": 0.442,
-  "roc_auc": 0.992,
-  "accuracy": 0.977,
+  "intercept": 0.520056,
+  "n_samples": 676,
+  "test_size": 136,
+  "repeat_rate": 0.419,
+  "roc_auc": 0.952,
+  "accuracy": 0.912,
   "feature_importances": [
     {
       "feature": "max_severity",
-      "importance": 5.9284
+      "importance": 6.2085
     },
     {
       "feature": "avg_severity",
-      "importance": 4.8148
+      "importance": 4.7046
     },
     {
       "feature": "recent_activity",
-      "importance": 0.9606
+      "importance": 0.7732
     },
     {
       "feature": "gang_member",
-      "importance": 0.3609
-    },
-    {
-      "feature": "ses_rank",
-      "importance": 0.1463
-    },
-    {
-      "feature": "edu_rank",
-      "importance": 0.0587
-    },
-    {
-      "feature": "is_male",
-      "importance": 0.0484
+      "importance": 0.1322
     },
     {
       "feature": "urban",
-      "importance": 0.0168
+      "importance": 0.0872
+    },
+    {
+      "feature": "is_male",
+      "importance": 0.0863
+    },
+    {
+      "feature": "ses_rank",
+      "importance": 0.0835
+    },
+    {
+      "feature": "edu_rank",
+      "importance": 0.0491
     },
     {
       "feature": "age",
-      "importance": 0.0034
+      "importance": 0.0055
     }
   ],
   "trained_on": "synthetic seeded dataset",
-  "trained_at": "2026-07-24"
+  "trained_at": "2026-08-21"
 }

@@ -13,6 +13,7 @@ from datetime import date, timedelta
 
 from src.database.session import get_db
 from src.database.models import Crime
+from src.database.dialect import month_number
 from src.api.auth import get_current_user
 
 router = APIRouter()
@@ -127,8 +128,8 @@ async def seasonal_trends(
 ) -> Dict[str, Any]:
     """Seasonal (month-of-year) crime pattern + festival-window event analysis."""
     rows = db.execute(text(
-        """
-        SELECT CAST(strftime('%m', date_occurred) AS INTEGER) AS mon, COUNT(*) AS c
+        f"""
+        SELECT {month_number('date_occurred')} AS mon, COUNT(*) AS c
         FROM v_crimes WHERE date_occurred IS NOT NULL
         GROUP BY mon
         """

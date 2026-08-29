@@ -16,6 +16,7 @@ from datetime import date
 import statistics
 
 from src.database.session import get_db
+from src.database.dialect import year_month
 from src.api.auth import get_current_user
 
 router = APIRouter()
@@ -67,7 +68,7 @@ async def get_anomalies(
     def grouped_series(dimension: str) -> Dict[str, List[Dict[str, Any]]]:
         rows = db.execute(text(
             f"""
-            SELECT {dimension} AS g, strftime('%Y-%m', date_occurred) AS m, COUNT(*) AS c
+            SELECT {dimension} AS g, {year_month('date_occurred')} AS m, COUNT(*) AS c
             FROM v_crimes
             WHERE date_occurred IS NOT NULL AND {dimension} IS NOT NULL
             GROUP BY g, m ORDER BY g, m ASC

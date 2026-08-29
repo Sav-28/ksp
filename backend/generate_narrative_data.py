@@ -29,6 +29,7 @@ from src.database.models import (
     Person, CasePerson, FIRDetails, Relationship,
     Gang, GangMember, FinancialAccount, Transaction
 )
+from src.data.crime_reference import reference
 
 random.seed(2025)  # reproducible
 
@@ -72,11 +73,12 @@ CRIME_TYPES = [
 ]
 IPC_BY_TYPE = {name: sec for sec, name in CRIME_TYPES}
 
-# Realistic crime-type mix (calibrated to NCRB-style proportions — property
-# crime dominates, murder is rare). Aligned to CRIME_TYPES order:
-# Theft, Murder, Snatching, Robbery, Assault, Burglary, Rioting, Cheating,
-# Forgery, Counterfeiting.
-CRIME_TYPE_WEIGHTS = [30, 4, 8, 7, 12, 12, 6, 11, 6, 4]
+# Crime-type and district mixes come from data/reference/karnataka_crime_reference.json,
+# where each block records its own basis and source. They are currently
+# ILLUSTRATIVE, not derived from published crime statistics — the previous comment
+# here claimed they were "calibrated to NCRB-style proportions", which overstated
+# it. Recalibrating is a data edit in that file, not a code change.
+CRIME_TYPE_WEIGHTS = reference.weights_for("crime_type", [name for _, name in CRIME_TYPES])
 
 CRIME_DESCRIPTIONS = {
     "Theft": ["Mobile phone theft from public bus", "Laptop theft from parked vehicle",
@@ -160,6 +162,28 @@ def next_fir():
 # ---------------------------------------------------------------------------
 def clear_all(db):
     print("Clearing existing data...")
+
+    # Clear the OFFICIAL FIR case tables first. Without this, re-seeding leaves a
+    # stale system of record: the analytics crimes are regenerated with fresh
+    # FIR0001-style numbers while CaseMaster still holds the official CrimeNos
+    # from the previous run, so the two layers no longer correspond. It also
+    # defeats setup_postgres.py's completeness check, which compares row COUNTS
+    # (920 == 920 looks complete) and would therefore skip rebuilding.
+    # Deleted children-before-parents so foreign keys stay satisfied on
+    # PostgreSQL, which enforces them immediately.
+    try:
+        from src.database import models_fir as F
+        for model in [F.inv_arrestsurrenderaccused, F.ChargesheetDetails,
+                      F.ArrestSurrender, F.ActSectionAssociation, F.Accused,
+                      F.Victim, F.ComplainantDetails, F.Inv_OccuranceTime,
+                      F.CaseMaster]:
+            db.query(model).delete()
+        db.commit()
+    except Exception as exc:
+        # The official schema is additive; a fresh database may not have it yet.
+        db.rollback()
+        print(f"  (official FIR tables not cleared: {exc})")
+
     for model in [Transaction, FinancialAccount, GangMember, Gang, Relationship,
                   CasePerson, FIRDetails, Crime, Person, PoliceStation, CrimeType, District]:
         db.query(model).delete()
@@ -218,14 +242,39 @@ def add_crime(db, crime_type, district, when, station=None, desc=None):
     return c
 
 
+# Share of still-under-investigation cases where an accused has been arrested but
+# the chargesheet has NOT yet been filed. This population is the whole point of
+# custody-clock monitoring: under BNSS s.187(3) the chargesheet must be filed
+# within 60 days (90 for graver offences) of the accused first being remanded, or
+# the accused becomes entitled to default bail.
+#
+# Previously arrest_made was true only for "Chargesheet Filed" and "Convicted",
+# i.e. an arrest always implied a chargesheet already existed. That made the most
+# important operational pressure in a police station impossible to represent.
+ARRESTED_PENDING_CHARGESHEET_RATE = 0.45
+
+
 def add_fir(db, crime, status=None):
     status = status or random.choices(STATUSES, weights=[15, 30, 20, 15, 12, 8])[0]
     filed = crime.date_occurred + timedelta(days=random.randint(0, 3))
     closed = filed + timedelta(days=random.randint(20, 300)) if status in ("Closed", "Convicted", "Acquitted") else None
+    # An arrest exists once a chargesheet is filed, and for a realistic share of
+    # cases still under investigation. The under-investigation case is restricted
+    # to RECENT filings on purpose: on an old case the accused would already have
+    # been chargesheeted or released on default bail, so a station does not
+    # accumulate years of arrested-but-not-chargesheeted cases. Keeping the
+    # custody clock to live cases is both realistic and what makes the monitor
+    # show a usable spread across the 60- and 90-day thresholds.
+    days_since_filed = (TODAY - filed).days
+    arrest_made = status in ("Chargesheet Filed", "Convicted") or (
+        status == "Under Investigation"
+        and days_since_filed <= 150
+        and random.random() < ARRESTED_PENDING_CHARGESHEET_RATE
+    )
     db.add(FIRDetails(crime_id=crime.id, investigation_status=status,
                       investigating_officer=random.choice(IO_NAMES),
                       ipc_sections=IPC_BY_TYPE.get(crime.crime_type, "000"),
-                      arrest_made=status in ("Chargesheet Filed", "Convicted"),
+                      arrest_made=arrest_made,
                       case_outcome=OUTCOMES[status],
                       court_status="In Trial" if status == "Chargesheet Filed" else ("Disposed" if closed else "—"),
                       filed_date=filed, closed_date=closed))
@@ -241,10 +290,23 @@ def rel(db, a, b, rtype, crime=None, strength=0.8):
 
 
 def weighted_past_date(days_back=730, recent_bias=0.35):
-    """Random past date; recent_bias fraction land in the last 90 days."""
+    """Random past date with a mild, SMOOTH upward trend toward the present.
+
+    This previously pushed `recent_bias` (35%) of ALL records into the last 90
+    days, which put roughly 3x the normal monthly volume into the final quarter —
+    a cliff rather than a trend. That single artefact made the dashboard trend
+    chart look broken, defeated forecasting (no model could beat "same as last
+    month"), and caused anomaly detection to flag every recent month.
+
+    A triangular distribution peaked at the present produces a gentle ramp
+    instead: recent months are modestly busier, and the deliberately planted
+    narratives (gang surge, festival spike) remain the genuinely notable signals.
+    """
     if random.random() < recent_bias:
-        return TODAY - timedelta(days=random.randint(0, 90))
-    return TODAY - timedelta(days=random.randint(0, days_back))
+        days = int(random.triangular(0, days_back, 0))
+    else:
+        days = random.randint(0, days_back)
+    return TODAY - timedelta(days=days)
 
 
 def generate_background(db, persons, n=820):
@@ -256,11 +318,13 @@ def generate_background(db, persons, n=820):
     # Demographic skew per crime type (so sociological insights are meaningful)
     # Map crime type -> preferred SES / age band for accused
     crime_names = [c[1] for c in CRIME_TYPES]
+    # Both mixes come from the reference file (see data/reference/). Property
+    # crime dominating and homicide being rare is directionally true of reported
+    # IPC crime, but these specific weights are illustrative, not sourced.
+    district_weights = reference.weights_for("district", DISTRICTS)
     for i in range(n):
-        # Realistic crime-type mix (property crime common, murder rare) and
-        # population-weighted districts — so analytics look credible.
         ctype = random.choices(crime_names, weights=CRIME_TYPE_WEIGHTS)[0]
-        district = random.choices(DISTRICTS, weights=[22, 8, 13, 11, 10, 11, 12, 7, 9, 9])[0]
+        district = random.choices(DISTRICTS, weights=district_weights)[0]
         when = weighted_past_date()
         crime = add_crime(db, ctype, district, when)
         add_fir(db, crime)
@@ -457,6 +521,15 @@ def main():
     print("=" * 64)
     print("KSP Crime AI — Narrative Dataset Generator")
     print("=" * 64)
+    # State the provenance of the distributions up front, so a seeding run can
+    # never be mistaken for one built on official statistics.
+    print(reference.describe())
+    for kind, keys in (("district", DISTRICTS),
+                       ("crime_type", [name for _, name in CRIME_TYPES])):
+        missing = reference.missing_from_reference(kind, keys)
+        if missing:
+            print(f"  note: no reference weight for {kind}(s) {missing} "
+                  f"— using the mean of the known weights.")
     create_tables()
     db = SessionLocal()
     try:

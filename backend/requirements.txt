@@ -8,3 +8,6 @@ uvicorn==0.24.0
 sqlalchemy==2.0.50
 python-multipart==0.0.6
 requests==2.32.3
+# PostgreSQL driver — required only when DATABASE_URL points at PostgreSQL
+# (production persistence). Harmless with the default SQLite setup.
+psycopg2-binary==2.9.10
