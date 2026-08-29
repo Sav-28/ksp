@@ -20,6 +20,7 @@ from src.database.models import Person, CasePerson, Crime, GangMember, Gang
 from src.api.auth import get_current_user
 from src.ml import risk_model
 from src.ml.features import make_vector, URBAN_DISTRICTS as ML_URBAN
+from src.services import cache
 
 router = APIRouter()
 
@@ -63,6 +64,17 @@ async def sociological_insights(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """Demographic profile of accused, normalised against the population baseline."""
+    # Cached for 15 minutes. This walks every person and every accused link, then
+    # runs a two-proportion test per cell, so it is the most expensive read in the
+    # application. It only changes when cases are added.
+    data, source = cache.get_or_compute(
+        "insights:sociological:v1", 900, lambda: _build_sociological(db))
+    data["cache"] = {"source": source, "ttl_seconds": 900}
+    return data
+
+
+def _build_sociological(db: Session) -> Dict[str, Any]:
     """
     Demographic profile of accused persons, NORMALISED against the recorded
     population.

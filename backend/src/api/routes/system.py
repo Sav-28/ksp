@@ -28,6 +28,21 @@ def _redact(url: str) -> str:
     return url
 
 
+@router.get("/system/services")
+async def system_services(
+    username: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Auditable inventory of Catalyst services.
+
+    Every entry carries a status, the call site, and where a service is not live
+    the exact reason. Services deliberately not used are included with the
+    reasoning, so this is an account rather than a highlight reel.
+    """
+    from src.services import service_inventory
+    return service_inventory.build()
+
+
 @router.get("/system/info")
 async def system_info(
     db: Session = Depends(get_db),
