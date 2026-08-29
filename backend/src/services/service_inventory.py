@@ -115,6 +115,49 @@ def _zia_status() -> tuple:
             "entry will report what actually happened.")
 
 
+def _job_scheduling_status() -> tuple:
+    """
+    (status, detail) for Job Scheduling.
+
+    Reads the project's jobpools, which is both the useful information and the
+    check for whether scheduling is usable: a jobpool is the one prerequisite
+    that has to be created in the Catalyst console.
+    """
+    pools = catalyst.list_jobpools()
+    diag = catalyst.diagnostics()
+
+    if pools is None:
+        reason = diag.get("last_job_error") or "the Catalyst SDK is not initialised here"
+        return ("not-configured",
+                f"The jobpool listing could not be read, so no schedule can be "
+                f"created: {reason} The digest endpoint still works when called "
+                f"directly.")
+
+    if not pools:
+        return ("not-configured",
+                "Job Scheduling answered, but this project has no jobpool. A "
+                "jobpool is created in the Catalyst console and is the only "
+                "remaining prerequisite - once one exists, POST "
+                "/api/system/jobs/digest schedules the custody-clock digest "
+                "against this AppSail deployment.")
+
+    names = ", ".join(str(p.get("name") or p.get("id")) for p in pools[:5])
+    crons = catalyst.list_crons() or []
+    ours = [c for c in crons if "digest" in str(c.get("cron_name", "")).lower()]
+    detail = (f"{len(pools)} jobpool(s) readable ({names}). Target type AppSail, "
+              f"so a schedule calls this deployment's own digest endpoint - no "
+              f"Catalyst Function and no second deployable.")
+    if ours:
+        detail += (f" {len(ours)} digest cron scheduled: "
+                   + ", ".join(f"{c.get('cron_name')} ({'enabled' if c.get('cron_status') else 'paused'})"
+                               for c in ours) + ".")
+        return ("live", detail)
+    detail += (" No digest cron exists yet; POST /api/system/jobs/digest creates "
+               "it. Reported as configured rather than live because listing a "
+               "jobpool proves the service answers, not that anything is scheduled.")
+    return ("configured", detail)
+
+
 def _mail_status() -> tuple:
     if not os.getenv("MAIL_FROM", "").strip():
         return ("not-configured",
@@ -142,13 +185,19 @@ def _filestore_status() -> tuple:
 
 def build() -> Dict[str, Any]:
     """The full inventory."""
-    diag = catalyst.diagnostics()
-
+    # The per-service checks below make real Catalyst calls, so diagnostics() has
+    # to be sampled AFTER them. Taken first, the sdk block reported
+    # job_scheduling_succeeded_at_least_once as false in the very response whose
+    # jobpool listing had just succeeded - a snapshot that contradicted the
+    # service entry beside it.
     stratus_status, stratus_detail = _sqlite_snapshot_status()
     cache_status, cache_detail = _cache_status()
     mail_status, mail_detail = _mail_status()
     fs_status, fs_detail = _filestore_status()
     zia_status, zia_detail = _zia_status()
+    job_status, job_detail = _job_scheduling_status()
+
+    diag = catalyst.diagnostics()
 
     services: List[Dict[str, Any]] = [
         {
@@ -258,20 +307,15 @@ def build() -> Dict[str, Any]:
         {
             "service": "Cron / Job Scheduling",
             "category": "orchestration",
-            "status": "not-used",
-            "call_site": None,
-            # CORRECTED. This entry previously claimed a scheduled trigger "has to
-            # invoke a Catalyst Function, which means a second deployable". That is
-            # wrong: zcatalyst_sdk/job_scheduling/_types.py defines TargetType
-            # FUNCTION, CIRCUIT, APPSAIL and WEBHOOK, and the AppSail and Webhook
-            # variants carry a url and headers - so a job can call this very app.
-            "detail": "Not used yet. The earlier reason given here - that a "
-                      "schedule must invoke a Catalyst Function, requiring a second "
-                      "deployable - was wrong: Job Scheduling supports AppSail and "
-                      "Webhook targets that take a URL and headers, so a job can "
-                      "call this app's own digest endpoint directly. The real "
-                      "remaining prerequisite is a jobpool, which is created in the "
-                      "Catalyst console.",
+            "status": job_status,
+            # This entry previously claimed a schedule "has to invoke a Catalyst
+            # Function, which means a second deployable". That was wrong:
+            # job_scheduling/_types.py defines TargetType FUNCTION, CIRCUIT,
+            # APPSAIL and WEBHOOK, and the AppSail and Webhook variants carry a
+            # url and headers - so a job can call this very app.
+            "call_site": "src/services/catalyst.py list_jobpools/list_crons/"
+                         "create_daily_cron, used by /api/system/jobs/digest",
+            "detail": job_detail,
         },
         {
             "service": "NoSQL / Search / Push / SmartBrowz / Circuits",

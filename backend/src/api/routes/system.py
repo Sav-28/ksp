@@ -6,14 +6,14 @@ important because SQLite on an ephemeral path (e.g. Catalyst /tmp) is wiped on
 restart, whereas PostgreSQL persists. Surfacing this makes the deployment mode
 explicit instead of a silent surprise.
 """
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any
 import os
 
 from src.database.session import get_db, engine, DATABASE_URL
 from src.database.models import Crime, Person
-from src.api.auth import get_current_user
+from src.api.auth import get_current_user, require_role
 from src.ml import risk_model
 
 router = APIRouter()
@@ -114,6 +114,149 @@ async def catalyst_probe(
             "X-ZC-Environment", "X-ZC-Admin-Cred-Token", "X-ZC-Admin-Cred-Type",
             "X-ZC-User-Cred-Token or x-zc-cookie",
         ],
+    }
+
+
+# The digest is wanted before the morning briefing, not at midnight.
+DIGEST_CRON_HOUR = int(os.getenv("KSP_DIGEST_HOUR", "7"))
+DIGEST_CRON_NAME = "ksp-custody-clock-digest"
+
+
+@router.get("/system/jobs")
+async def list_jobs(
+    username: str = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """
+    The project's jobpools and crons, as Catalyst reports them.
+
+    Admin-only: a cron definition carries the scheduler's target URL, and there is
+    no reason for anyone else to read the schedule.
+    """
+    from src.services import catalyst
+    from src.api import auth as auth_mod
+
+    pools = catalyst.list_jobpools()
+    crons = catalyst.list_crons()
+    diag = catalyst.diagnostics()
+
+    return {
+        "jobpools": pools,
+        "crons": crons,
+        "digest_schedule": {
+            "cron_name": DIGEST_CRON_NAME,
+            "hour_local": DIGEST_CRON_HOUR,
+            "timezone": "Asia/Kolkata",
+            "target": "AppSail -> GET /api/compliance/digest?send=true",
+            "exists": bool(crons and any(
+                c.get("cron_name") == DIGEST_CRON_NAME for c in crons)),
+        },
+        # Presence only. The token itself is never returned by any endpoint.
+        "scheduler_token_configured": auth_mod.job_token_configured(),
+        "appsail_target_id_present": bool(catalyst.appsail_target_id()),
+        "prerequisites": {
+            "jobpool": ("present" if pools else
+                        "MISSING - create one in the Catalyst console (Job "
+                        "Scheduling > Jobpool). This is the only blocker."),
+            "scheduler_token": ("present" if auth_mod.job_token_configured() else
+                                f"MISSING - set KSP_JOB_TOKEN to at least "
+                                f"{auth_mod.MIN_JOB_TOKEN_LENGTH} random characters, "
+                                f"otherwise the scheduled call cannot authenticate."),
+        },
+        "sdk_error": diag.get("last_job_error"),
+    }
+
+
+@router.post("/system/jobs/digest")
+async def schedule_digest(
+    username: str = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """
+    Schedule the custody-clock digest to run daily against this deployment.
+
+    Admin-only, and refuses rather than half-works: without a scheduler token the
+    created cron would fire and be rejected every morning, which is worse than
+    not existing because it looks configured.
+
+    The job targets this AppSail deployment directly - Catalyst Job Scheduling
+    supports an AppSail target carrying a URL and headers, so no Catalyst
+    Function and no second deployable is involved.
+    """
+    from src.services import catalyst
+    from src.api import auth as auth_mod
+
+    if not auth_mod.job_token_configured():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(f"KSP_JOB_TOKEN is not set, or is shorter than "
+                    f"{auth_mod.MIN_JOB_TOKEN_LENGTH} characters. Without it the "
+                    f"scheduled request could not authenticate, so the cron would "
+                    f"fail every morning while appearing to be configured."),
+        )
+
+    target_id = catalyst.appsail_target_id()
+    if not target_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=("X_ZOHO_CATALYST_RESOURCE_ID is not set, so this process "
+                    "cannot identify itself as the AppSail target. This endpoint "
+                    "only works when running on Catalyst."),
+        )
+
+    pools = catalyst.list_jobpools()
+    if not pools:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=("No jobpool exists in this Catalyst project. Create one in the "
+                    "console under Job Scheduling, then retry. Reason from the "
+                    "SDK: " + str(catalyst.diagnostics().get("last_job_error"))),
+        )
+    pool = pools[0]
+
+    existing = catalyst.list_crons() or []
+    already = next((c for c in existing
+                    if c.get("cron_name") == DIGEST_CRON_NAME), None)
+    if already:
+        return {"created": False, "reason": "A digest cron already exists.",
+                "cron": already}
+
+    result = catalyst.create_daily_cron(
+        cron_name=DIGEST_CRON_NAME,
+        hour=DIGEST_CRON_HOUR,
+        job_meta={
+            "job_name": "custody-clock-digest",
+            "jobpool_id": str(pool.get("id")),
+            "jobpool_name": pool.get("name"),
+            "target_type": "AppSail",
+            "target_id": target_id,
+            "url": "/api/compliance/digest?send=true",
+            "request_method": "GET",
+            # The secret travels in the job definition, which lives in Catalyst.
+            # It is never echoed back by this endpoint or by /api/system/jobs.
+            "headers": {auth_mod.JOB_TOKEN_HEADER: os.getenv("KSP_JOB_TOKEN", "")},
+        },
+    )
+
+    if not result["created"]:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "message": "Catalyst rejected the cron definition.",
+                # Both cron_type spellings are attempted because the SDK
+                # contradicts itself; the errors say which the API wanted.
+                "attempts": result["attempts"],
+            },
+        )
+
+    return {
+        "created": True,
+        "cron": result["cron"],
+        "cron_type_accepted": result["cron_type_accepted"],
+        "jobpool": {"id": pool.get("id"), "name": pool.get("name")},
+        "schedule": f"daily at {DIGEST_CRON_HOUR:02d}:00 Asia/Kolkata",
+        "note": ("The job calls this deployment's own digest endpoint with the "
+                 "scheduler token. Mail delivery still depends on MAIL_FROM and "
+                 "KSP_DIGEST_TO; without them the digest renders as a preview and "
+                 "reports that it did not send."),
     }
 
 

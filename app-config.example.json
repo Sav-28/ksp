@@ -13,8 +13,16 @@
 		"_comment_optional": "Optional Catalyst services. Each degrades to a documented fallback when unset, and GET /api/system/services reports the real status.",
 		"KSP_FILESTORE_FOLDER_ID": "",
 		"KSP_CACHE_SEGMENT_ID": "",
+
+		"_comment_mail": "Catalyst Mail. MAIL_FROM must be a sender address verified in the Catalyst console, or delivery is rejected. KSP_DIGEST_TO is a comma-separated recipient list. With either unset, the custody digest still renders and is returned as a preview that says it was not sent.",
 		"MAIL_FROM": "",
 		"KSP_DIGEST_TO": "",
+
+		"_comment_job_token": "SECOND AUTHENTICATION PATH - read before setting. A Catalyst cron cannot log in, so this shared secret lets it call GET /api/compliance/digest?send=true. It is accepted on that ONE route only, in the X-KSP-Job-Token header, compared in constant time. Leave EMPTY to disable the scheduled digest entirely; the endpoint then requires a normal bearer token. If you do set it: use 32+ random characters (python -c \"import secrets; print(secrets.token_hex(32))\"), and never reuse KSP_SECRET_KEY. deploy.ps1 refuses to deploy a short, placeholder or duplicated value.",
+		"KSP_JOB_TOKEN": "",
+
+		"_comment_digest_hour": "Local hour (Asia/Kolkata) for the daily digest cron, so it lands before the morning briefing.",
+		"KSP_DIGEST_HOUR": "7",
 
 		"KSP_NLP_PROVIDER": "rules",
 		"KSP_AUTOSEED": "false",

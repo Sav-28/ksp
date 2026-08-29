@@ -173,6 +173,54 @@ def get_current_user(authorization: Optional[str] = Header(default=None)) -> str
     return username
 
 
+# ---------------------------------------------------------------------------
+# Scheduler authentication - a SECOND way into exactly one endpoint
+# ---------------------------------------------------------------------------
+# A Catalyst cron cannot log in: it has no password and cannot hold a session, so
+# a signed user token is not available to it. The custody-clock digest therefore
+# accepts a shared secret in a header as an alternative to a bearer token.
+#
+# This is a second authentication path into the API, which is a real widening of
+# the attack surface, so it is deliberately constrained:
+#
+#   * It is NOT a dependency and NOT part of get_current_user or require_role.
+#     A helper that could be dropped onto any route would eventually be dropped
+#     onto a route that should never have it. It is a plain function that the one
+#     endpoint calls explicitly.
+#   * It is off unless KSP_JOB_TOKEN is set. No default, no fallback value.
+#   * The comparison is constant-time, so a wrong token leaks nothing through
+#     response timing.
+#   * A minimum length is enforced here as well as in deploy.ps1, because a short
+#     shared secret on a public endpoint is brute-forceable and the guard should
+#     not live only in a script someone might bypass.
+#   * The principal it returns is "scheduler", which is not in OFFICERS, so it
+#     can never satisfy require_role and cannot reach any other route.
+MIN_JOB_TOKEN_LENGTH = 32
+JOB_TOKEN_HEADER = "X-KSP-Job-Token"
+SCHEDULER_PRINCIPAL = "scheduler"
+
+
+def job_token_configured() -> bool:
+    """Whether a usable scheduler token is set. Short tokens do not count."""
+    token = os.getenv("KSP_JOB_TOKEN", "").strip()
+    return len(token) >= MIN_JOB_TOKEN_LENGTH
+
+
+def verify_job_token(presented: Optional[str]) -> bool:
+    """
+    Constant-time check of a presented scheduler token.
+
+    False whenever the feature is not configured, so an unset variable cannot be
+    matched by an empty header.
+    """
+    expected = os.getenv("KSP_JOB_TOKEN", "").strip()
+    if len(expected) < MIN_JOB_TOKEN_LENGTH:
+        return False
+    if not presented:
+        return False
+    return hmac.compare_digest(expected, presented.strip())
+
+
 def require_role(*allowed_roles: str):
     """
     Dependency factory enforcing role-based access control (Area 10).

@@ -29,6 +29,14 @@ codebase never has to guess:
     app.email()     -> Email
         .send_mail({from_email, to_email: List[str], subject, content,
                     html_mode, display_name, cc, bcc, reply_to, attachments})
+    app.job_scheduling() -> JobScheduling
+        .get_all_jobpool() / .get_jobpool(id)
+        .cron  -> .get_all() / .get(id) / .create(details) / .update(id, details)
+                  .pause(id) / .resume(id) / .run(id) / .delete(id)
+        .job   -> .submit_job(meta) / .get_job(id) / .delete_job(id)
+        # A cron's job_meta may set target_type "AppSail" or "Webhook", each
+        # taking url, params, headers, request_method and request_body - so a
+        # schedule can call this app directly, with no Catalyst Function.
     app.zia()       -> Zia
         .get_NER_prediction(list_of_docs: List[str])
         .get_keyword_extraction(list_of_docs: List[str])
@@ -108,6 +116,8 @@ _state: Dict[str, Any] = {
     "last_stratus_error": None,
     "last_zia_error": None,
     "zia_ok_once": False,     # has a Zia call EVER returned in this process
+    "last_job_error": None,
+    "jobs_ok_once": False,
 }
 
 
@@ -388,6 +398,121 @@ def zia_used_successfully() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Job Scheduling
+# ---------------------------------------------------------------------------
+# A cron here can target this very app: job_scheduling/_types.py defines
+# TargetType.APPSAIL and TargetType.WEBHOOK, both carrying url, headers,
+# request_method and request_body. No Catalyst Function and no second deployable
+# is needed, which corrects a claim this project previously published.
+#
+# ONE UNRESOLVED CONFLICT IN THE SDK: for a daily schedule, CronType.CALENDER is
+# spelled "Calender" in the enum while ICatalystDailyCron declares
+# cron_type: Literal["Calendar"]. One of them is wrong and the docs 404, so
+# create_cron() tries both spellings and reports which the API accepted rather
+# than picking one and hoping.
+_CRON_TYPE_SPELLINGS = ("Calendar", "Calender")
+
+
+def _job_call(what: str, fn) -> Optional[Any]:
+    """Run one Job Scheduling call, recording the outcome. Never raises."""
+    app = get_app()
+    if app is None:
+        _state["last_job_error"] = (
+            f"{what}: Catalyst SDK not initialised "
+            f"({_state['last_init_error'] or 'no credentials in scope'})"
+        )
+        return None
+    try:
+        result = fn(app.job_scheduling())
+        _state["last_job_error"] = None
+        _state["jobs_ok_once"] = True
+        return result
+    except Exception as exc:
+        _state["last_job_error"] = f"{what}: {type(exc).__name__}: {exc}"[:400]
+        log.debug("Job Scheduling %s failed: %s", what, exc)
+        return None
+
+
+def list_jobpools() -> Optional[List[Dict[str, Any]]]:
+    """
+    Every jobpool in the project, or None if the call did not return.
+
+    A jobpool is the one prerequisite that has to be created in the console, so
+    this doubles as the check for whether scheduling is usable at all.
+    """
+    result = _job_call("get_all_jobpool", lambda js: js.get_all_jobpool())
+    return result if isinstance(result, list) else None
+
+
+def list_crons() -> Optional[List[Dict[str, Any]]]:
+    """Every cron in the project, or None if the call did not return."""
+    result = _job_call("cron.get_all", lambda js: js.cron.get_all())
+    return result if isinstance(result, list) else None
+
+
+def create_daily_cron(cron_name: str, job_meta: Dict[str, Any],
+                      hour: int, minute: int = 0,
+                      timezone: str = "Asia/Kolkata") -> Dict[str, Any]:
+    """
+    Create a dynamic cron that fires once a day.
+
+    Returns {"created": bool, "cron": dict|None, "cron_type_accepted": str|None,
+             "attempts": [...]} - never raises, and always reports what was tried.
+
+    The `cron_type` spelling is tried both ways because the SDK disagrees with
+    itself: CronType.CALENDER is the string "Calender" while ICatalystDailyCron
+    declares Literal["Calendar"]. Rather than pick one, this tries each and
+    records the API's answer, so the attempts list documents which is correct.
+    """
+    attempts: List[Dict[str, Any]] = []
+    for spelling in _CRON_TYPE_SPELLINGS:
+        details = {
+            "cron_name": cron_name,
+            "cron_status": True,
+            "cron_type": spelling,
+            "cron_detail": {
+                "hour": hour, "minute": minute, "second": 0,
+                "timezone": timezone,
+                "repetition_type": "daily",
+            },
+            "job_meta": job_meta,
+        }
+        created = _job_call(f"cron.create[{spelling}]",
+                            lambda js, d=details: js.cron.create(d))
+        if created:
+            return {"created": True, "cron": created,
+                    "cron_type_accepted": spelling, "attempts": attempts}
+        attempts.append({"cron_type": spelling, "error": _state["last_job_error"]})
+    return {"created": False, "cron": None,
+            "cron_type_accepted": None, "attempts": attempts}
+
+
+def run_cron(cron_id: str) -> Optional[Any]:
+    """Submit a cron's job immediately, for a demo or a manual catch-up."""
+    return _job_call("cron.run", lambda js: js.cron.run(cron_id))
+
+
+def delete_cron(cron_id: str) -> Optional[Any]:
+    """Remove a cron."""
+    return _job_call("cron.delete", lambda js: js.cron.delete(cron_id))
+
+
+def jobs_used_successfully() -> bool:
+    """Whether any Job Scheduling call has returned in this process."""
+    return bool(_state.get("jobs_ok_once"))
+
+
+def appsail_target_id() -> str:
+    """
+    This AppSail deployment's resource id, for a job that targets it.
+
+    Injected by the platform as X_ZOHO_CATALYST_RESOURCE_ID - confirmed present
+    on the deployed app via /api/system/catalyst-probe.
+    """
+    return os.getenv("X_ZOHO_CATALYST_RESOURCE_ID", "").strip()
+
+
+# ---------------------------------------------------------------------------
 # Mail
 # ---------------------------------------------------------------------------
 def send_mail(subject: str, content: str, to: List[str],
@@ -437,6 +562,9 @@ def diagnostics() -> Dict[str, Any]:
         "last_stratus_error": _state["last_stratus_error"],
         "zia_succeeded_at_least_once": _state["zia_ok_once"],
         "last_zia_error": _state["last_zia_error"],
+        "job_scheduling_succeeded_at_least_once": _state["jobs_ok_once"],
+        "last_job_error": _state["last_job_error"],
+        "appsail_target_id_present": bool(appsail_target_id()),
         # Presence and age only - the header values are credentials.
         "gateway_headers_captured": captures,
         "gateway_headers_age_seconds": (

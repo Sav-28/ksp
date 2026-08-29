@@ -204,6 +204,178 @@ def test_zia_probe_returns_raw_shapes_and_never_500s():
         assert attempt["error"], f"{name} failed without a reason"
 
 
+# --- 4b. Job Scheduling wrappers -------------------------------------------
+def test_job_scheduling_wrappers_return_none_and_record_a_reason_locally():
+    from src.services import catalyst
+
+    assert catalyst.list_jobpools() is None
+    reason = catalyst.diagnostics()["last_job_error"]
+    assert reason and "get_all_jobpool" in reason
+    assert catalyst.list_crons() is None
+
+
+def test_sdk_diagnostics_reflect_the_calls_made_while_building_the_inventory():
+    """
+    build() makes real Catalyst calls, so the sdk block has to be sampled after
+    them. Sampled first, it reported job_scheduling_succeeded_at_least_once as
+    false in the very response whose jobpool listing had just succeeded.
+    """
+    from src.services import catalyst
+
+    inv = _inventory()
+    live = catalyst.diagnostics()
+    for key in ("last_job_error", "last_zia_error", "initialised_at_least_once"):
+        assert inv["sdk"][key] == live[key], (
+            f"sdk.{key} in the inventory does not match the state after building it"
+        )
+
+
+def test_job_scheduling_is_not_reported_live_without_a_readable_jobpool():
+    """
+    Listing a jobpool is what proves the service answers. Without it the entry
+    must say so and name the missing prerequisite, not claim configuration.
+    """
+    from src.services import catalyst
+
+    assert catalyst.jobs_used_successfully() is False
+    entry = _entry("Cron / Job Scheduling")
+    assert entry["status"] == "not-configured"
+    assert "jobpool" in entry["detail"].lower()
+
+
+# --- 4c. Scheduler authentication -------------------------------------------
+# This is the security-sensitive part of the build: a second way into the API.
+# The tests below are the contract for how narrow it is meant to be.
+GOOD_TOKEN = "t" * 40
+
+
+def test_job_token_is_disabled_when_unset(monkeypatch):
+    """No default and no fallback: unset means the path does not exist."""
+    from src.api import auth
+
+    monkeypatch.delenv("KSP_JOB_TOKEN", raising=False)
+    assert auth.job_token_configured() is False
+    assert auth.verify_job_token("anything") is False
+    # An empty header must not match an unset variable.
+    assert auth.verify_job_token("") is False
+    assert auth.verify_job_token(None) is False
+
+
+def test_a_short_token_is_refused_even_if_it_matches(monkeypatch):
+    """
+    A short shared secret on a network-reachable route is brute-forceable. The
+    length floor is enforced in the backend as well as in deploy.ps1, so it
+    cannot be bypassed by editing the deploy script.
+    """
+    from src.api import auth
+
+    monkeypatch.setenv("KSP_JOB_TOKEN", "short")
+    assert auth.job_token_configured() is False
+    assert auth.verify_job_token("short") is False
+
+
+def test_a_correct_token_verifies_and_a_wrong_one_does_not(monkeypatch):
+    from src.api import auth
+
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    assert auth.job_token_configured() is True
+    assert auth.verify_job_token(GOOD_TOKEN) is True
+    assert auth.verify_job_token(GOOD_TOKEN + "x") is False
+    assert auth.verify_job_token(GOOD_TOKEN[:-1]) is False
+    assert auth.verify_job_token("") is False
+
+
+def test_digest_accepts_the_scheduler_token(monkeypatch):
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    r = client.get("/api/compliance/digest", headers={"X-KSP-Job-Token": GOOD_TOKEN})
+    assert r.status_code == 200, r.text
+    assert r.json()["requested_by"] == "scheduler"
+
+
+def test_digest_rejects_a_wrong_scheduler_token(monkeypatch):
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    r = client.get("/api/compliance/digest", headers={"X-KSP-Job-Token": "wrong"})
+    assert r.status_code == 401
+
+
+def test_digest_rejects_a_token_when_the_feature_is_unconfigured(monkeypatch):
+    monkeypatch.delenv("KSP_JOB_TOKEN", raising=False)
+    r = client.get("/api/compliance/digest", headers={"X-KSP-Job-Token": GOOD_TOKEN})
+    assert r.status_code == 401
+
+
+def test_digest_still_accepts_a_normal_bearer_token(monkeypatch):
+    """Adding the scheduler path must not disturb the officer path."""
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    r = client.get("/api/compliance/digest", headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["requested_by"] == "admin"
+
+
+def test_digest_still_requires_some_credential(monkeypatch):
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    assert client.get("/api/compliance/digest").status_code == 401
+
+
+def test_the_scheduler_token_works_on_no_other_route(monkeypatch):
+    """
+    The whole point of not making this a dependency. The scheduler principal is
+    not a known officer, so it cannot satisfy require_role either.
+    """
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    h = {"X-KSP-Job-Token": GOOD_TOKEN}
+    for path in ("/api/compliance/report", "/api/compliance/custody-clock",
+                 "/api/stats", "/api/offenders", "/api/system/info",
+                 "/api/system/services", "/api/system/jobs", "/api/audit"):
+        assert client.get(path, headers=h).status_code in (401, 403), (
+            f"{path} accepted the scheduler token and must not"
+        )
+
+
+def test_the_token_is_never_echoed_back(monkeypatch):
+    """A secret that appears in a response body is a secret in a log somewhere."""
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    for path, headers in (
+        ("/api/compliance/digest", {"X-KSP-Job-Token": GOOD_TOKEN}),
+        ("/api/system/jobs", _auth()),
+        ("/api/system/services", _auth()),
+        ("/api/system/info", _auth()),
+    ):
+        r = client.get(path, headers=headers)
+        assert GOOD_TOKEN not in r.text, f"{path} leaked the scheduler token"
+
+
+def test_job_endpoints_are_admin_only(monkeypatch):
+    monkeypatch.setenv("KSP_JOB_TOKEN", GOOD_TOKEN)
+    for creds in (("investigator", "invest@2024"), ("supervisor", "super@2024"),
+                  ("analyst", "analyst@2024")):
+        h = _auth(*creds)
+        assert client.get("/api/system/jobs", headers=h).status_code == 403
+        assert client.post("/api/system/jobs/digest", headers=h).status_code == 403
+    assert client.get("/api/system/jobs", headers=_auth()).status_code == 200
+
+
+def test_scheduling_refuses_without_a_token_rather_than_creating_a_broken_cron(monkeypatch):
+    """
+    A cron created without a token would be rejected every morning while looking
+    configured. Refusing is the honest outcome.
+    """
+    monkeypatch.delenv("KSP_JOB_TOKEN", raising=False)
+    r = client.post("/api/system/jobs/digest", headers=_auth())
+    assert r.status_code == 400
+    assert "KSP_JOB_TOKEN" in r.json()["detail"]
+
+
+def test_jobs_listing_names_the_missing_prerequisites(monkeypatch):
+    monkeypatch.delenv("KSP_JOB_TOKEN", raising=False)
+    r = client.get("/api/system/jobs", headers=_auth())
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scheduler_token_configured"] is False
+    assert "MISSING" in body["prerequisites"]["scheduler_token"]
+    assert "MISSING" in body["prerequisites"]["jobpool"]
+
+
 # --- 5. Narrative analysis ---------------------------------------------------
 # A realistic statement, containing the things a real one does: an offence, a
 # district, a person, a vehicle, a valuable and an amount.

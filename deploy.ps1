@@ -65,6 +65,30 @@ if ($seed -ne "false") {
     $fatal += "KSP_AUTOSEED must be 'false' on a persistent database so real data is never re-seeded (currently '$seed')."
 }
 
+# KSP_JOB_TOKEN is the shared secret a Catalyst cron presents to the digest
+# endpoint, so it is a credential on a network-reachable route. Optional - the
+# scheduled path is simply disabled when unset - but a SHORT one is worse than
+# none, because it looks configured while being brute-forceable. The backend
+# enforces the same minimum; this catches it before it ships.
+$jobToken = [string]$cfg.env_variables.KSP_JOB_TOKEN
+if (-not [string]::IsNullOrWhiteSpace($jobToken)) {
+    if ($jobToken -match "GENERATE_WITH|REPLACE_|change-me") {
+        $fatal += "KSP_JOB_TOKEN is still a placeholder. Generate one: python -c ""import secrets; print(secrets.token_hex(32))"""
+    }
+    elseif ($jobToken.Length -lt 32) {
+        $fatal += "KSP_JOB_TOKEN is only $($jobToken.Length) characters. It authenticates a scheduled call to /api/compliance/digest, so it needs 32+ random characters. Leave it empty to disable the scheduled digest entirely."
+    }
+    elseif ($jobToken -eq $secret) {
+        $fatal += "KSP_JOB_TOKEN is the same value as KSP_SECRET_KEY. Reusing the token-signing key as a shared secret means leaking one leaks the other. Generate a separate value."
+    }
+    else {
+        Write-Host "      scheduler: KSP_JOB_TOKEN set, so the daily digest cron can authenticate." -ForegroundColor DarkGray
+    }
+}
+else {
+    Write-Host "NOTE: KSP_JOB_TOKEN is empty, so the scheduled digest is disabled. /api/system/jobs reports it as a missing prerequisite." -ForegroundColor DarkGray
+}
+
 if ($fatal.Count -gt 0) {
     Write-Host "`nDeploy blocked - fix these in app-config.json:" -ForegroundColor Red
     $fatal | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
