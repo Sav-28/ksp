@@ -46,6 +46,30 @@ interface RefData {
   socio_economic_statuses: string[];
 }
 
+// Shape of POST /api/narrative/analyse. Every field is a SUGGESTION: the officer
+// applies or ignores each one. Nothing here is written to the FIR automatically.
+interface NarrativeAnalysis {
+  entities: {
+    persons: string[];
+    places: string[];
+    organisations: string[];
+    vehicles: string[];
+    valuables: string[];
+    money: { token: string; value: number }[];
+    dates: string[];
+    times: string[];
+  };
+  suggested_crime_type: string | null;
+  suggested_ipc: string | null;
+  suggested_district: string | null;
+  keywords: string[];
+  keyphrases: string[];
+  sentiment: { label: string; score: number; sentences_analysed: number } | null;
+  engine: string;
+  engine_note: string;
+  advisory: string;
+}
+
 interface PersonRow {
   role: string;
   full_name: string;
@@ -105,6 +129,13 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
   const [policeStation, setPoliceStation] = useState('');
   const [dateOccurred, setDateOccurred] = useState('');
   const [description, setDescription] = useState('');
+
+  // Statement analysis (Catalyst Zia, with a rule-based fallback). Kept entirely
+  // separate from the form state: applying a suggestion is an explicit click.
+  const [analysis, setAnalysis] = useState<NarrativeAnalysis | null>(null);
+  const [analysing, setAnalysing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [applied, setApplied] = useState<Record<string, boolean>>({});
   const [ipcSections, setIpcSections] = useState('');
   const [io, setIo] = useState('');
   const [ioRank, setIoRank] = useState('Police Inspector');
@@ -323,11 +354,80 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
     }
   };
 
+  // --- Statement analysis --------------------------------------------------
+  // Reads the free text the officer typed and offers structured suggestions.
+  // Deliberately manual rather than on-change: it is a network call, and an
+  // officer mid-sentence does not want the form moving underneath them.
+  const analyseStatement = async () => {
+    const text = description.trim();
+    if (!text) {
+      setAnalysisError(t('Type the statement first, then analyse it.',
+                         'ಮೊದಲು ಹೇಳಿಕೆಯನ್ನು ಟೈಪ್ ಮಾಡಿ, ನಂತರ ವಿಶ್ಲೇಷಿಸಿ.'));
+      return;
+    }
+    setAnalysing(true); setAnalysisError(null); setAnalysis(null); setApplied({});
+    try {
+      const res = await apiFetch('/api/narrative/analyse', {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      });
+      if (res.status === 403) {
+        setAnalysisError(t('You do not have permission to analyse case text.',
+                           'ಪ್ರಕರಣ ಪಠ್ಯ ವಿಶ್ಲೇಷಿಸಲು ನಿಮಗೆ ಅನುಮತಿ ಇಲ್ಲ.'));
+        return;
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        setAnalysisError(data?.detail || t('Could not analyse the statement.',
+                                           'ಹೇಳಿಕೆಯನ್ನು ವಿಶ್ಲೇಷಿಸಲಾಗಲಿಲ್ಲ.'));
+        return;
+      }
+      setAnalysis(data as NarrativeAnalysis);
+    } catch {
+      setAnalysisError(t('Could not reach the analysis service.',
+                         'ವಿಶ್ಲೇಷಣಾ ಸೇವೆಯನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ.'));
+    } finally {
+      setAnalysing(false);
+    }
+  };
+
+  // Each apply is one field, one click, and is recorded so the button can show
+  // it has been taken. Nothing cascades.
+  const applyCrimeType = () => {
+    if (!analysis?.suggested_crime_type) return;
+    setCrimeType(analysis.suggested_crime_type);
+    if (analysis.suggested_ipc) setIpcSections(analysis.suggested_ipc);
+    setApplied((prev) => ({ ...prev, crimeType: true }));
+  };
+
+  const applyDistrict = () => {
+    if (!analysis?.suggested_district) return;
+    setDistrict(analysis.suggested_district);
+    setPoliceStation('');
+    setApplied((prev) => ({ ...prev, district: true }));
+  };
+
+  // Adds an extracted name as a new person row with the given role. The officer
+  // still has to fill in age, gender and the rest - the name is a starting point,
+  // not a record.
+  const addExtractedPerson = (name: string, role: string) => {
+    setPersons((prev) => {
+      const blank = prev.findIndex((p) => !p.full_name.trim());
+      const row = { ...emptyPerson(role), full_name: name };
+      if (blank >= 0) {
+        return prev.map((p, i) => (i === blank ? row : p));
+      }
+      return [...prev, row];
+    });
+    setApplied((prev) => ({ ...prev, [`person:${name}`]: true }));
+  };
+
   const resetForm = () => {
     setCrimeType(''); setDistrict(''); setPoliceStation(''); setDateOccurred('');
     setDescription(''); setIpcSections(''); setStatusVal('Registered'); setArrestMade(false);
     setIoRank('Police Inspector'); setIoDesignation('Investigating Officer');
     setPersons([emptyPerson('complainant')]);
+    setAnalysis(null); setAnalysisError(null); setApplied({});
     clearLocation();
   };
 
@@ -464,10 +564,133 @@ const RegisterFIRView = ({ language }: { language: 'en' | 'kn' }) => {
             <input type="date" value={dateOccurred} max={today} onChange={(e) => setDateOccurred(e.target.value)} style={input} />
           </Field>
         </div>
-        <Field label={t('Description', 'ವಿವರಣೆ')}>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} style={{ ...input, resize: 'vertical' }}
-            placeholder={t('Brief facts of the incident...', 'ಘಟನೆಯ ಸಂಕ್ಷಿಪ್ತ ವಿವರ...')} />
+        <Field label={t('Complainant statement / brief facts', 'ದೂರುದಾರರ ಹೇಳಿಕೆ / ಸಂಕ್ಷಿಪ್ತ ವಿವರ')}>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={5} style={{ ...input, resize: 'vertical' }}
+            placeholder={t('Write the incident in plain words, as the complainant described it. Then use Analyse statement to pull out the offence, location, people and property.',
+                           'ದೂರುದಾರರು ವಿವರಿಸಿದಂತೆ ಘಟನೆಯನ್ನು ಬರೆಯಿರಿ. ನಂತರ ಅಪರಾಧ, ಸ್ಥಳ, ವ್ಯಕ್ತಿಗಳು ಮತ್ತು ಆಸ್ತಿಯನ್ನು ಹೊರತೆಗೆಯಲು ಹೇಳಿಕೆ ವಿಶ್ಲೇಷಿಸಿ ಬಳಸಿ.')} />
         </Field>
+
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" onClick={analyseStatement} disabled={analysing || !description.trim()}
+            style={{ ...analyseBtn, opacity: analysing || !description.trim() ? 0.55 : 1 }}>
+            {analysing
+              ? '⏳ ' + t('Analysing...', 'ವಿಶ್ಲೇಷಿಸುತ್ತಿದೆ...')
+              : '🔍 ' + t('Analyse statement', 'ಹೇಳಿಕೆ ವಿಶ್ಲೇಷಿಸಿ')}
+          </button>
+          <span style={{ fontSize: 12, color: '#78909c' }}>
+            {t('Reads the text above and suggests fields. Nothing is filled in until you choose it.',
+               'ಮೇಲಿನ ಪಠ್ಯವನ್ನು ಓದಿ ಕ್ಷೇತ್ರಗಳನ್ನು ಸೂಚಿಸುತ್ತದೆ. ನೀವು ಆಯ್ಕೆ ಮಾಡುವವರೆಗೆ ಏನೂ ಭರ್ತಿಯಾಗುವುದಿಲ್ಲ.')}
+          </span>
+        </div>
+
+        {analysisError && (
+          <div style={{ marginTop: 10, fontSize: 13, color: '#c62828' }}>⚠️ {analysisError}</div>
+        )}
+
+        {analysis && (
+          <div style={{ marginTop: 14, background: '#f3f6fb', border: '1px solid #ccd7e6', borderRadius: 9, padding: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#1a237e' }}>
+                {t('Suggested from the statement', 'ಹೇಳಿಕೆಯಿಂದ ಸೂಚಿಸಲಾಗಿದೆ')}
+              </div>
+              {/* Which engine answered is stated on the face of the panel, not buried:
+                  an officer should know whether they are looking at a model's
+                  output or a keyword match before they accept it. */}
+              <span style={analysis.engine === 'zia' ? enginePillLive : enginePillFallback}>
+                {analysis.engine === 'zia'
+                  ? t('Catalyst Zia', 'Catalyst Zia')
+                  : t('Rule-based fallback', 'ನಿಯಮ ಆಧಾರಿತ')}
+              </span>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#546e7a', margin: '6px 0 12px' }}>
+              {analysis.advisory}
+            </div>
+
+            {/* Applyable suggestions */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+              {analysis.suggested_crime_type && (
+                <button type="button" onClick={applyCrimeType}
+                  disabled={applied.crimeType} style={applied.crimeType ? chipDone : chipAction}>
+                  {applied.crimeType ? '✓ ' : '+ '}
+                  {t('Offence', 'ಅಪರಾಧ')}: {analysis.suggested_crime_type}
+                  {analysis.suggested_ipc ? ` (IPC ${analysis.suggested_ipc})` : ''}
+                </button>
+              )}
+              {analysis.suggested_district && (
+                <button type="button" onClick={applyDistrict}
+                  disabled={applied.district} style={applied.district ? chipDone : chipAction}>
+                  {applied.district ? '✓ ' : '+ '}
+                  {t('District', 'ಜಿಲ್ಲೆ')}: {analysis.suggested_district}
+                </button>
+              )}
+              {!analysis.suggested_crime_type && !analysis.suggested_district && (
+                <span style={{ fontSize: 12.5, color: '#78909c' }}>
+                  {t('No offence type or district recognised in the text.',
+                     'ಪಠ್ಯದಲ್ಲಿ ಅಪರಾಧ ಪ್ರಕಾರ ಅಥವಾ ಜಿಲ್ಲೆ ಗುರುತಿಸಲಾಗಿಲ್ಲ.')}
+                </span>
+              )}
+            </div>
+
+            {/* Extracted names, each addable under a role the officer picks */}
+            {analysis.entities.persons.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={detectedLabel}>👤 {t('Names found', 'ಕಂಡುಬಂದ ಹೆಸರುಗಳು')}</div>
+                {analysis.entities.persons.map((name) => (
+                  <div key={name} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 600, color: '#263238', minWidth: 150 }}>{name}</span>
+                    {applied[`person:${name}`] ? (
+                      <span style={chipDone}>✓ {t('added', 'ಸೇರಿಸಲಾಗಿದೆ')}</span>
+                    ) : (
+                      ['complainant', 'accused', 'victim', 'witness'].map((role) => (
+                        <button key={role} type="button" onClick={() => addExtractedPerson(name, role)}
+                          style={chipAction}>
+                          + {role}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ))}
+                <div style={{ fontSize: 11.5, color: '#78909c' }}>
+                  {t('Adding a name only starts a person row — age, gender and the rest are still yours to fill in.',
+                     'ಹೆಸರು ಸೇರಿಸುವುದು ವ್ಯಕ್ತಿ ಸಾಲನ್ನು ಪ್ರಾರಂಭಿಸುತ್ತದೆ — ವಯಸ್ಸು, ಲಿಂಗ ಇತ್ಯಾದಿ ನೀವೇ ಭರ್ತಿ ಮಾಡಬೇಕು.')}
+                </div>
+              </div>
+            )}
+
+            {/* Read-only detections. No field to apply them to, but an officer
+                checking their own write-up wants to see what the text said. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
+              <Detected label={'🏍️ ' + t('Vehicles', 'ವಾಹನಗಳು')} items={analysis.entities.vehicles} />
+              <Detected label={'💰 ' + t('Property', 'ಆಸ್ತಿ')} items={analysis.entities.valuables} />
+              <Detected label={'₹ ' + t('Amounts', 'ಮೊತ್ತ')} items={analysis.entities.money.map((m) => m.token)} />
+              <Detected label={'📅 ' + t('Dates / times', 'ದಿನಾಂಕ / ಸಮಯ')}
+                items={[...analysis.entities.dates, ...analysis.entities.times]} />
+              <Detected label={'📍 ' + t('Places', 'ಸ್ಥಳಗಳು')} items={analysis.entities.places} />
+              <Detected label={'🏢 ' + t('Organisations', 'ಸಂಸ್ಥೆಗಳು')} items={analysis.entities.organisations} />
+            </div>
+
+            <details style={{ marginTop: 12 }}>
+              <summary style={{ fontSize: 12, color: '#546e7a', cursor: 'pointer' }}>
+                {t('How this was produced', 'ಇದನ್ನು ಹೇಗೆ ತಯಾರಿಸಲಾಯಿತು')}
+              </summary>
+              <div style={{ fontSize: 12, color: '#546e7a', marginTop: 6, lineHeight: 1.6 }}>
+                {analysis.engine_note}
+                {analysis.sentiment && (
+                  <div style={{ marginTop: 6 }}>
+                    {t('Statement tone', 'ಹೇಳಿಕೆಯ ಸ್ವರ')}: <strong>{analysis.sentiment.label}</strong>
+                    {' '}({analysis.sentiment.sentences_analysed} {t('sentence(s)', 'ವಾಕ್ಯ')})
+                  </div>
+                )}
+                {analysis.keyphrases.length > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    {t('Key phrases', 'ಪ್ರಮುಖ ನುಡಿಗಟ್ಟುಗಳು')}: {analysis.keyphrases.join(' · ')}
+                  </div>
+                )}
+              </div>
+            </details>
+          </div>
+        )}
       </div>
 
       {/* Crime Location — pick the exact spot (not just the district centroid) */}
@@ -711,6 +934,47 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
     {children}
   </div>
 );
+
+// One group of read-only detections. Renders nothing when the list is empty, so
+// the panel does not fill up with headings for things the statement did not say.
+const Detected = ({ label, items }: { label: string; items: string[] }) => {
+  if (!items.length) return null;
+  return (
+    <div>
+      <div style={detectedLabel}>{label}</div>
+      <div style={{ fontSize: 13, color: '#263238', lineHeight: 1.6 }}>
+        {items.join(' · ')}
+      </div>
+    </div>
+  );
+};
+
+const detectedLabel: React.CSSProperties = {
+  fontSize: 11.5, fontWeight: 700, color: '#546e7a',
+  textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 3,
+};
+const chipAction: React.CSSProperties = {
+  background: '#fff', border: '1px solid #90a4ae', color: '#1a237e',
+  borderRadius: 14, padding: '4px 11px', fontSize: 12.5, fontWeight: 600,
+  cursor: 'pointer',
+};
+const chipDone: React.CSSProperties = {
+  background: '#e8f5e9', border: '1px solid #a5d6a7', color: '#2e7d32',
+  borderRadius: 14, padding: '4px 11px', fontSize: 12.5, fontWeight: 600,
+  cursor: 'default',
+};
+const analyseBtn: React.CSSProperties = {
+  background: '#1a237e', color: '#fff', border: 'none', borderRadius: 7,
+  padding: '9px 16px', fontSize: 13.5, fontWeight: 700, cursor: 'pointer',
+};
+const enginePillLive: React.CSSProperties = {
+  background: '#e8eaf6', border: '1px solid #9fa8da', color: '#283593',
+  borderRadius: 12, padding: '3px 10px', fontSize: 11.5, fontWeight: 700,
+};
+const enginePillFallback: React.CSSProperties = {
+  background: '#fff8e1', border: '1px solid #ffe082', color: '#8d6e00',
+  borderRadius: 12, padding: '3px 10px', fontSize: 11.5, fontWeight: 700,
+};
 
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e0e0e0', borderRadius: 10, padding: 20, marginBottom: 20, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' };
 const sectionTitle: React.CSSProperties = { color: '#1a237e', fontSize: 17, marginBottom: 14 };

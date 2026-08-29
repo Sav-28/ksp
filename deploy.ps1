@@ -153,6 +153,17 @@ Write-Host "[5/5] Deploying to Catalyst AppSail..." -ForegroundColor Cyan
 # config problem but is really a logged-out CLI. Check first so the message is
 # actionable.
 $who = (& catalyst whoami 2>&1 | Out-String).Trim()
+if ($who -match "not supported in CI") {
+    # A leftover CI=true in the environment (a React build sets it to turn
+    # warnings into errors) puts the CLI into CI mode, where whoami is refused.
+    # Without this branch the failure reads as "not logged in", which is wrong
+    # and sends you off running catalyst login for no reason.
+    Write-Host "`nDeploy blocked - the CI environment variable is set, which puts the" -ForegroundColor Red
+    Write-Host "Catalyst CLI into CI mode and disables the commands used here." -ForegroundColor Red
+    Write-Host "Clear it and re-run:" -ForegroundColor Red
+    Write-Host '  Remove-Item Env:\CI' -ForegroundColor Yellow
+    exit 1
+}
 if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($who) -or $who -notmatch "@") {
     Write-Host "`nDeploy blocked - the Catalyst CLI is not logged in." -ForegroundColor Red
     Write-Host "Run this in your own terminal (it opens a browser and cannot be automated):" -ForegroundColor Red
