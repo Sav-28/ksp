@@ -309,14 +309,90 @@ def weighted_past_date(days_back=730, recent_bias=0.35):
     return TODAY - timedelta(days=days)
 
 
+def _age_band_of(age):
+    """Mirrors the bands the sociological analysis reports."""
+    if age is None:
+        return "Unknown"
+    if age < 25:
+        return "18-24"
+    if age < 35:
+        return "25-34"
+    if age < 45:
+        return "35-44"
+    if age < 60:
+        return "45-59"
+    return "60+"
+
+
+AGE_BANDS_ORDER = ["18-24", "25-34", "35-44", "45-59", "60+"]
+
+# Age association per offence type, planted as a TENDENCY.
+#
+# The preceding version of this function carried a comment promising a
+# "demographic skew per crime type (so sociological insights are meaningful)" and
+# a "map crime type -> preferred SES / age band" — neither of which existed.
+# Accused were drawn uniformly from the person pool, so the accused profile was
+# simply the population profile and the INSIGHTS tab reported population
+# composition as though it were a crime finding.
+#
+# The age-crime curve is chosen because it is the most robust regularity in
+# criminology: street and property offending peaks in the late teens and twenties
+# and declines with age, while fraud-type offences skew older because they depend
+# on position or access. Deliberately confined to AGE. Socio-economic status,
+# education and occupation are left unbiased, so the analysis correctly reports no
+# material over-representation on those dimensions — a tool that distinguishes
+# signal from noise is worth more than one that manufactures findings everywhere.
+#
+# Illustrative, not derived from Karnataka data.
+OFFENCE_AGE_WEIGHTS = {
+    #                  18-24  25-34  35-44  45-59  60+
+    "Snatching":       [40,    34,    16,     7,    3],
+    "Robbery":         [34,    34,    20,     8,    4],
+    "Rioting":         [30,    30,    24,    11,    5],
+    "Assault":         [28,    30,    24,    12,    6],
+    "Burglary":        [26,    31,    24,    12,    7],
+    "Theft":           [26,    30,    24,    13,    7],
+    "Murder":          [18,    27,    30,    17,    8],
+    "Cheating":        [8,     20,    34,    25,   13],
+    "Forgery":         [7,     19,    35,    26,   13],
+    "Counterfeiting":  [6,     18,    35,    27,   14],
+}
+
+
+def _pick_accused(by_band, fallback, ctype, already):
+    """
+    Choose an accused person whose age band fits the offence's age profile.
+
+    Falls back to an unweighted pick when the drawn band has nobody left, so a
+    thin band can never stall generation.
+    """
+    weights = OFFENCE_AGE_WEIGHTS.get(ctype)
+    if weights:
+        for _ in range(6):   # a few attempts before giving up on the weighting
+            band = random.choices(AGE_BANDS_ORDER, weights=weights)[0]
+            candidates = by_band.get(band)
+            if candidates:
+                person = random.choice(candidates)
+                if person not in already:
+                    return person
+    return random.choice(fallback)
+
+
 def generate_background(db, persons, n=820):
     """Bulk realistic crimes with accused/victims and FIR details."""
     print(f"Generating {n} background crimes...")
     offender_pool = random.sample(persons, k=len(persons) // 6)  # ~16% are repeat-prone
     victim_pool = [p for p in persons if p not in offender_pool]
 
-    # Demographic skew per crime type (so sociological insights are meaningful)
-    # Map crime type -> preferred SES / age band for accused
+    # Age-banded indexes, so accused selection can follow the offence's age
+    # profile without scanning the whole pool for every pick.
+    offenders_by_band = {}
+    for p in offender_pool:
+        offenders_by_band.setdefault(_age_band_of(p.age), []).append(p)
+    persons_by_band = {}
+    for p in persons:
+        persons_by_band.setdefault(_age_band_of(p.age), []).append(p)
+
     crime_names = [c[1] for c in CRIME_TYPES]
     # Both mixes come from the reference file (see data/reference/). Property
     # crime dominating and homicide being rare is directionally true of reported
@@ -332,7 +408,12 @@ def generate_background(db, persons, n=820):
         n_accused = random.choices([1, 2, 3], weights=[62, 28, 10])[0]
         accused = []
         for _ in range(n_accused):
-            person = random.choice(offender_pool) if random.random() < 0.55 else random.choice(persons)
+            # Repeat-prone pool most of the time, general population otherwise;
+            # either way the age band follows the offence's profile.
+            if random.random() < 0.55:
+                person = _pick_accused(offenders_by_band, offender_pool, ctype, accused)
+            else:
+                person = _pick_accused(persons_by_band, persons, ctype, accused)
             if person not in accused:
                 accused.append(person)
                 link(db, crime, person, "accused")
