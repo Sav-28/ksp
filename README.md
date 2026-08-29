@@ -1,380 +1,615 @@
-# KSP Crime AI — Conversational Crime Intelligence & Analytics Platform
+# KSP Crime AI
 
-An AI-powered platform for the **Karnataka State Police** that lets investigators,
-analysts, and policymakers interact with the state crime database using natural
-language (English **and** Kannada), and go far beyond simple retrieval —
-discovering criminal networks, profiling offenders, surfacing socio-demographic
-patterns, tracing financial trails, and forecasting emerging crime.
+**Conversational crime intelligence for the Karnataka State Police.** Ask questions
+of the state crime database in English or Kannada, register FIRs against the
+official 28-table schema, and work the analysis a station actually needs — criminal
+networks, offender risk, statutory custody deadlines, financial trails and
+forecasting.
 
-> Built for the conversational-crime-intelligence challenge. Covers all 10
-> framework areas — see the mapping below.
-
----
-
-## Challenge Coverage
-
-| # | Challenge Area | Status | Where |
-|---|----------------|--------|-------|
-| 1 | Conversational Crime Intelligence (EN + Kannada, voice, context, PDF export) | ✅ | AI Assistant tab |
-| 2 | Criminal Network & Relationship Analysis | ✅ | NETWORK tab |
-| 3 | Crime Pattern, Trend & Hotspot Analytics | ✅ | DASHBOARD + MAP tabs |
-| 4 | Sociological Crime Insights | ✅ | INSIGHTS tab |
-| 5 | Criminology-Based Offender Profiling | ✅ | PROFILES tab |
-| 6 | Investigator Decision Support | ✅ | chat: "summarize / similar cases" |
-| 7 | Financial Crime & Transaction Link Analysis | ✅ | FINANCE tab |
-| 8 | Crime Forecasting & Early Warning | ✅ | FORECAST tab |
-| 9 | Explainable AI & Transparent Analytics | ✅ | "Why this answer?" on every reply |
-| 10 | Secure Role-Based Access & Governance | ✅ | role-gated tabs, FIR registration & case-close RBAC, AUDIT tab |
-
-The database implements the **official Karnataka Police FIR schema** (28 normalized
-tables — `CaseMaster`, `Victim`, `Accused`, `ComplainantDetails`, `ArrestSurrender`,
-`ChargesheetDetails`, `Act`/`Section`, `CrimeHead`/`CrimeSubHead`, lookup masters,
-etc.) with the official 18-digit `CrimeNo`. See **[the schema module](backend/src/database/models_fir.py)**
-and the projection ETL **[migrate_to_fir_schema.py](backend/migrate_to_fir_schema.py)**.
-
-For the current plan and status, see **[docs/PHASE2_PLAN.md](docs/PHASE2_PLAN.md)**.
-Superseded documents are kept under **[docs/archive/](docs/archive/)**.
+<p>
+<img alt="Platform" src="https://img.shields.io/badge/platform-Zoho%20Catalyst%20AppSail-1a237e">
+<img alt="Backend" src="https://img.shields.io/badge/backend-FastAPI%20%C2%B7%20Python%203.11-306998">
+<img alt="Frontend" src="https://img.shields.io/badge/frontend-React%2018%20%C2%B7%20TypeScript-1976d2">
+<img alt="Tests" src="https://img.shields.io/badge/tests-75%20passing-2e7d32">
+<img alt="Endpoints" src="https://img.shields.io/badge/endpoints-37%20verified%20green-2e7d32">
+<img alt="Data" src="https://img.shields.io/badge/data-synthetic%20only-b34700">
+</p>
 
 ---
 
-## Tech Stack
+## Live deployment
 
-| Layer | Technology |
-|-------|-----------|
-| Backend | Python, FastAPI, SQLAlchemy |
-| Database | PostgreSQL (prod, persistent) / SQLite (dev) — one codebase, swap via `DATABASE_URL`; date-part SQL is emitted per dialect so both are genuinely supported |
-| NLP | scikit-learn (TF-IDF + LogisticRegression) + rule-based entities + Kannada normalization |
-| Conversational AI (planned upgrade) | Local LLM via **Ollama** (`qwen2.5:3b`) as a decoupled understanding/narration service |
-| Frontend | React 18 + TypeScript |
-| Auth | HMAC-signed tokens + PBKDF2 password hashing + role-based access |
-| Charts/Graph/Map | Hand-built SVG (no external chart/graph dependency) |
-| Deployment | Zoho Catalyst **AppSail** — single origin serves the React build **and** the FastAPI API (no CORS); Docker provided |
+**https://ksp-api-50044161264.development.catalystappsail.in**
+
+| Sign in as | Password | Use it for |
+|---|---|---|
+| `investigator` | `invest@2024` | registering FIRs, statement analysis, case work |
+| `supervisor` | `super@2024` | everything above, plus compliance and the audit log |
+| `analyst` | `analyst@2024` | read-only analytics (cannot write, by design) |
+| `admin` | `admin@2024` | platform diagnostics |
+
+> Catalyst services only work on the deployed URL. Running locally there is no
+> Catalyst gateway, so the SDK has no credentials and Zia, Stratus, Cache and Mail
+> all decline — the app degrades to its documented fallbacks and says which engine
+> answered. That is expected behaviour, not a fault.
+
+### See the interesting part in 60 seconds
+
+1. Sign in as `investigator / invest@2024`, open **REGISTER FIR**.
+2. Paste this into *Complainant statement*:
+
+   > On 14 August 2026 at about 9 PM, the complainant Ramesh Kumar was returning to
+   > Jayanagar in Bengaluru when two men on a black Pulsar motorcycle snatched his
+   > gold chain worth Rs 85,000 near the bus stand and fled towards Wilson Garden.
+   > The accused Imran Shaikh was later identified.
+
+3. Click **Analyse statement**.
+
+Catalyst Zia reads the prose and returns both people, the vehicle, the stolen
+property, the amount, the date and the time. The offence type, IPC section and
+district come from this project's own Karnataka reference lists — Zia does not
+classify offences, and the response says so. **Nothing is applied automatically:**
+each result is a chip the officer clicks, because the legal classification of an
+offence is an officer's act and the IPC section on an FIR ends up in front of a
+court.
+
+A blue **Catalyst Zia** pill means the model ran. An amber **Rule-based fallback**
+pill means it did not, and the panel explains why.
 
 ---
 
-## Features
+## Contents
 
-**Conversational interface** — natural-language queries in English & Kannada,
-voice input, context-aware follow-ups ("and in Mysuru?", "who was the accused?"),
-and one-click conversation export to PDF.
+- [What problem this solves](#what-problem-this-solves)
+- [Capability coverage](#capability-coverage)
+- [Catalyst platform](#catalyst-platform)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Getting started](#getting-started)
+- [Configuration](#configuration)
+- [API reference](#api-reference)
+- [Testing and verification](#testing-and-verification)
+- [Deployment](#deployment)
+- [Measured models](#measured-models)
+- [Security](#security)
+- [Data provenance](#data-provenance)
+- [Documentation index](#documentation-index)
+- [Roadmap](#roadmap)
 
-**Analytics dashboard** — totals and breakdowns by district, crime type, and
-month, with trend and bar charts.
+---
 
-**FIR registration (write workflow)** — role-gated form to register a new FIR in
-any of Karnataka's **31 districts** (with real police stations): crime details,
-an **interactive Leaflet map picker** (click / landmark autocomplete / GPS) to
-capture the exact location, investigating officer with **rank & designation**,
-**accused mugshot photos**, and **gang tagging** per accused. It generates the
-official 18-digit `CrimeNo`, mirrors into the `CaseMaster` schema, and flows
-straight into the dashboard, map, network, and forecasting. A soft **jurisdiction
-warning** flags a pin that falls outside the selected district (Zero-FIR aware).
+## What problem this solves
 
-**Case Investigation** — enter a Crime No (FIR) to pull the full dossier: accused,
-victims, incident location with **coordinates + embedded map and "Get Directions"**,
-and police/officer/court details from the official schema. Investigators can
-**advance the investigation status**, and supervisors/admins can **close a case**
-(two-tier RBAC), synced to the official schema.
+A crime database answers the question you knew how to ask. An investigator asking
+*"which areas are seeing the most chain snatching, and who's been arrested there
+before?"* has to become an SQL author first, so most of the value in the data is
+reachable only by whoever happens to know the schema.
 
-**Legal-section queries** — ask by IPC/section ("cases under IPC 302", "section 379
-in Mysuru", "u/s 420") and the engine maps it to the crime type.
+This platform closes that gap in three ways:
 
-**Criminal network analysis** — clean **radial hub-and-spoke graph** grounded in
-real co-accused cases: the focus person sits at the centre, direct links form an
-inner ring and second-degree links an outer ring, with a **direct-link count** on
-the node and a stats strip. Every edge traces to the actual linking Crime No(s)
-(hover to see them). Registering an FIR with multiple accused **auto-creates the
-network links**, and gang tagging feeds organized-crime clustering. Includes an
-offender search box and click-to-re-centre.
+1. **Natural language in, parameterised SQL out.** Questions in English or Kannada
+   become `{intent, entities}`, which a deterministic query engine executes. The
+   language layer never writes SQL, so answers stay injection-safe and auditable.
+2. **Analysis the data supports but nobody has time to run** — co-accused networks,
+   repeat-offender risk, socio-demographic correlation, seasonal patterns,
+   statutory custody deadlines.
+3. **An operational screen, not just analytics.** `COMPLIANCE` answers the question
+   a station actually opens a system for: which of my cases breaches a statutory
+   chargesheet deadline, and when.
 
-**Hotspot map** — geographic crime distribution with district hotspots and
-90-day emerging-surge alerts.
+---
 
-**Sociological insights** — accused breakdown by age, gender, socio-economic
-status, education, occupation, and **urban/rural**, plus **social-risk-factor
-correlations** (economic stress, education, occupation, urbanization).
+## Capability coverage
 
-**Offender profiling** — repeat-offender ranking with an explainable 0-100 risk
-score, primary modus operandi, and full case history; drill in from any accused.
+The six scored capabilities are documented in **[CAPABILITIES.md](CAPABILITIES.md)**,
+which states for each one what is implemented, where to see it, and **what it does
+not do**. That last column is the point — a capability map with no gaps in it is a
+marketing document.
 
-**Decision support** — automated case summaries, timelines, investigative leads,
-and similar-case matching with outcomes.
+| # | Capability | Primary screens |
+|---|---|---|
+| C1 | Advanced visualization | `DASHBOARD` `MAP` `FORECAST` `COMPLIANCE` |
+| C2 | Criminological network & link analysis | `NETWORK` |
+| C3 | Sociological & AI-driven predictive dashboards | `INSIGHTS` `PROFILES` |
+| C4 | Pattern & trend discovery | `FORECAST` `MAP` `DASHBOARD` |
+| C5 | Network & behavioural analysis | `PROFILES` `CASE INVESTIGATION` `NETWORK` |
+| C6 | AI/ML-driven intelligence | `PROFILES` `FORECAST` `AI ASSISTANT` `REGISTER FIR` |
 
-**Financial analysis** — suspicious money-trail tracing (a labeled demo
-integration; production would connect to bank / FIU-IND feeds).
+Beyond the six, the platform implements the **official Karnataka Police FIR schema**
+— 28 normalised tables (`CaseMaster`, `Victim`, `Accused`, `ComplainantDetails`,
+`ArrestSurrender`, `ChargesheetDetails`, `Act`/`Section`, `CrimeHead`/`CrimeSubHead`
+and lookup masters) with the official 18-digit `CrimeNo`. See
+[`models_fir.py`](backend/src/database/models_fir.py) and the projection ETL
+[`migrate_to_fir_schema.py`](backend/migrate_to_fir_schema.py).
 
-**Forecasting & trends** — next-month projection, district early-warning alerts,
-and **seasonal (month-of-year) + festival-window** trend analysis.
+---
 
-**Case analytics** — arrest and clearance (chargesheet) rates per district, and
-officer caseload — computed from the official `ArrestSurrender`/`ChargesheetDetails`.
+## Catalyst platform
 
-**Explainable AI** — every answer carries an evidence trail (intent, confidence,
-filters, records examined, data source, interpretation).
+Everything runs on Zoho Catalyst. **`GET /api/system/services`** publishes a live
+inventory: every service with a status, the call site a reviewer can open, and where
+it is not working, the exact reason.
 
-**Governance** — token auth, PBKDF2-hashed passwords, **4-role access control**
-(investigator / analyst / supervisor / policymaker) with per-role tabs, and a
-persisted, supervisor-viewable audit log.
+**Status is derived from observed operations, never from configuration.** A service
+is reported `live` only once a call has actually succeeded in that instance. This
+matters because the commonest way to overstate a platform is to set an environment
+variable and call the service "integrated".
+
+| Service | Status | What it does here |
+|---|---|---|
+| **AppSail** | `live` | Hosts the FastAPI app and serves the React build from the same origin — no CORS, no gateway preflight |
+| **Stratus** | `live` | Persists the SQLite database. `/tmp` is wiped on restart, so the file is snapshotted to object storage after each write and restored on the first request after a restart |
+| **Cache** | `live` | Read-through cache over the three most expensive analytical endpoints. Every response names which tier answered |
+| **Zia Text Analytics** | `live` | NER, keyword extraction and sentiment over the complainant statement typed during FIR registration |
+| Static web hosting | `platform` | Via AppSail; the React build is served by the same process as the API |
+| **Mail** | `not-configured` | Custody-clock digest. Built and attempted; Catalyst returns `INVALID_ID: No such from_email` — the sender must be registered in the console |
+| **Job Scheduling** | `not-configured` | Daily digest cron targeting this AppSail deployment. Code complete and tested; the project has no jobpool, which only the console can create |
+| **SmartBrowz** | `not-available` | Server-side PDF rendering. Called for real and refused with `INVALID_ID: No such User` for every request, including an empty test document — so the report endpoint serves a print-laid-out A4 HTML page instead and names the reason in a response header |
+| File Store | `not-configured` | Accessor present; no feature depends on it yet |
+| Data Store + ZCQL, Catalyst Auth, QuickML, Zia OCR/Face, NoSQL, Search, Push, Circuits | `not-used` | Each listed with its reason. ZCQL is not a SQL wire protocol, so adopting Data Store is a rewrite of every model and query rather than a migration |
+
+**14 services listed, 4 live, 9 with call sites.** Three are built but blocked —
+two on a Catalyst console step, one on account provisioning. The inventory quotes
+the API's own error for each, and distinguishes `not-available` (called and refused)
+from `not-configured` (a prerequisite we can fix) from `not-used` (a choice we made).
+
+Two diagnostic endpoints exist because the Python SDK's documentation pages return
+404, and guessing at SDK behaviour cost this project several defects:
+
+- `GET /api/system/catalyst-probe` — which `X-ZC-*` headers AppSail actually
+  forwards, and that `initialize()` fails while `initialize(req=request)` succeeds.
+  Credential values are never returned, only presence and length.
+- `GET /api/system/zia-probe` — Zia's raw, unmodified responses, so the shapes
+  could be read off a real reply before any feature was built on them.
+
+`CAPABILITIES.md` records what each of those cost to establish, including two
+claims this documentation previously got **wrong** and has since corrected.
 
 ---
 
 ## Architecture
 
-```
-        Browser (police stations — zero install)
-                  │ HTTPS
-        ┌─────────▼─────────────────────────────┐
-        │        ZOHO CATALYST AppSail          │
-        │  FastAPI app (single origin)          │
-        │   • serves the React build (static)   │
-        │   • serves /api/... on the same host  │  ← no CORS / no gateway preflight
-        └─────────┬─────────────────────────────┘
-                  │ TLS
-        ┌─────────▼─────────────────────────────┐
-        │   PostgreSQL (managed, persistent)    │
-        │   • survives restarts & redeploys     │
-        │   • shared by every app instance      │
-        │   • analytics tables + official FIR   │
-        │     schema + v_crimes view            │
-        └─────────┬─────────────────────────────┘
-                  │ HTTPS (optional — language understanding only)
-        ┌─────────▼──────────┐
-        │   AI SERVICE       │   FastAPI + Ollama (qwen2.5:3b)
-        │  text → {intent,   │   optional GPU server; if unreachable the app
-        │  entities} JSON    │   falls back to the built-in rule-based NLP
-        └────────────────────┘
+```mermaid
+flowchart TB
+    B["Browser — police station<br/>zero install"]
+
+    subgraph AS["Zoho Catalyst AppSail — single origin, no CORS"]
+        direction TB
+        R["React 18 + TypeScript build<br/>served as static files"]
+        API["FastAPI<br/>routers · RBAC · audit"]
+        MW["HTTP middleware<br/>captures Catalyst X-ZC-* headers<br/>and replays them into worker threads"]
+    end
+
+    subgraph INT["Intelligence layer"]
+        direction LR
+        NLP["NLP<br/>intent + entities<br/>Kannada normalisation"]
+        QE["Query engine<br/>parameterised SQL only"]
+        ML["Risk model · forecaster<br/>pure-Python inference"]
+        NAR["Statement analyser<br/>Zia primary, rules fallback"]
+    end
+
+    subgraph DATA["Data layer — SQLAlchemy"]
+        direction LR
+        FIR["Official FIR schema<br/>28 tables · 18-digit CrimeNo"]
+        AN["Analytics tables<br/>persons · gangs · finance · audit"]
+    end
+
+    subgraph CAT["Catalyst services"]
+        direction LR
+        ST["Stratus<br/>DB snapshot"]
+        CA["Cache<br/>read-through"]
+        ZIA["Zia<br/>text analytics"]
+        MAIL["Mail · Job Scheduling<br/>blocked on console steps"]
+    end
+
+    B -->|HTTPS| R
+    B -->|HTTPS /api| MW --> API
+    API --> INT
+    INT --> DATA
+    NAR -.->|per request| ZIA
+    API -.->|read-through| CA
+    DATA -.->|debounced write-back| ST
+    ST -.->|restore on first request| DATA
+    API -.-> MAIL
+
+    style AS fill:#e8eaf6,stroke:#1a237e
+    style INT fill:#e8f5e9,stroke:#1b5e20
+    style DATA fill:#e3f2fd,stroke:#0d47a1
+    style CAT fill:#fff3e0,stroke:#b34700
 ```
 
-The React production build is copied into `backend/static` and served by the same
-FastAPI app that exposes `/api/...`, so the browser makes same-origin calls — this
-avoids the Catalyst gateway intercepting CORS preflight (`OPTIONS`) requests.
+Three design decisions worth calling out:
 
-The LLM never touches the database — it only translates language into the
-existing **safe, parameterized query engine**, which executes deterministically.
-This keeps queries injection-safe and answers auditable.
+**Single origin.** The React production build is copied into `backend/static` and
+served by the same FastAPI process that exposes `/api/...`, so the browser makes
+same-origin calls. This sidesteps the Catalyst gateway intercepting CORS preflight
+requests.
+
+**The language layer never touches the database.** An LLM or rule engine converts
+text to `{intent, entities}`; the existing parameterised query engine executes it.
+Queries stay injection-safe and every answer carries an evidence trail.
+
+**Persistence is a whole-file snapshot, and honest about its limits.** AppSail's
+`/tmp` is writable but wiped on restart, so the SQLite file is snapshotted to
+Stratus after each write and restored on the first request after a boot. Because
+the file is the unit of transfer, this is **single-instance**: with more than one
+running instance the last writer wins. PostgreSQL via `DATABASE_URL` remains
+supported and is the production scale-out route. `GET /api/system/info` reports
+which mode is active and whether the round trip has actually been observed.
+
+### Repository layout
 
 ```
 backend/
-├── main.py                       # FastAPI app, routers, CORS, startup
-├── generate_narrative_data.py    # seeds crimes, persons, gangs, FIRs, money trails
-├── migrate_to_fir_schema.py      # projects data into the official FIR schema
+├── main.py                        FastAPI app, routers, startup, Catalyst middleware
+├── generate_narrative_data.py     seeds crimes, persons, gangs, FIRs, money trails
+├── migrate_to_fir_schema.py       projects data into the official FIR schema
 ├── src/
 │   ├── api/
-│   │   ├── auth.py               # tokens, password hashing, 4-role require_role()
-│   │   └── routes/               # chat, stats, network, hotspots, insights,
-│   │       │                     #   decision_support, details, casework, audit, auth
-│   ├── database/                 # models.py (analytics) + models_fir.py (official schema)
-│   ├── nlp/                      # intent_classifier, followup, kannada_support
-│   ├── query_engine/             # translator.py (intent → safe SQL)
-│   └── services/                 # crime_detail.py
-└── tests/test_smoke.py           # 13 pytest cases
+│   │   ├── auth.py                tokens, PBKDF2, require_role(), scheduler token
+│   │   └── routes/                chat, crimes, stats, network, hotspots, insights,
+│   │                              decision_support, compliance, casework, audit, system
+│   ├── database/                  models.py (analytics) · models_fir.py (official)
+│   ├── nlp/                       intent_classifier · followup · kannada_support
+│   ├── query_engine/              translator.py — intent to safe SQL
+│   ├── ml/                        risk_model · forecast_model · features
+│   └── services/
+│       ├── catalyst.py            honest SDK wrapper — records why, never raises
+│       ├── catalyst_store.py      3-layer SQLite persistence via Stratus
+│       ├── cache.py               read-through cache, gzip envelope
+│       ├── narrative.py           statement analysis — Zia merged with local canon
+│       ├── compliance.py          custody clock, pendency, stations, officers
+│       ├── digest.py              custody-clock mail digest
+│       ├── report_html.py         shared renderer — digest and PDF cannot drift
+│       ├── report_pdf.py          downloadable compliance report
+│       └── service_inventory.py   the auditable Catalyst service map
+└── tests/                         75 pytest cases
 frontend/src/
-├── pages/ChatPage.tsx            # main app + chat
-├── components/                   # Dashboard, NetworkView/Graph, HotspotView,
-│   │                             #   InsightsView, ProfilesView, FinanceView,
-│   │                             #   ForecastView, CaseInvestigationView, AuditView, Login
-├── api.ts                        # API base, token, authenticated fetch
-└── locale.ts                     # Kannada localization of data + answers
+├── pages/ChatPage.tsx             shell + conversational interface
+├── components/                    Dashboard · NetworkView · HotspotView · InsightsView
+│                                  ProfilesView · FinanceView · ForecastView
+│                                  ComplianceView · RegisterFIRView · CaseInvestigation
+│                                  AuditView · Login
+├── api.ts                         API base, token, authenticated fetch
+└── locale.ts                      Kannada localisation of data and answers
 ```
 
 ---
 
-## Getting Started
+## Features
+
+**Conversational interface** — natural-language queries in English and Kannada,
+voice input, context-aware follow-ups (*"and in Mysuru?"*, *"who was the accused?"*),
+and conversation export to PDF. Every reply carries a **"Why this answer?"** trail:
+intent, confidence, filters applied, records examined, and which engine parsed the
+question.
+
+**FIR registration with statement analysis** — a role-gated form covering all
+**31 Karnataka districts** with real police stations: crime details, an interactive
+Leaflet map picker (click, landmark autocomplete or GPS) for the exact location,
+investigating officer with rank and designation, accused photographs, and gang
+tagging. Generates the official 18-digit `CrimeNo`, mirrors into `CaseMaster`, and
+flows straight into every analytical view. A soft **jurisdiction warning** flags a
+pin outside the selected district (Zero-FIR aware). Catalyst Zia reads the
+complainant statement and proposes structured fields for the officer to confirm.
+
+**Case compliance and pendency** — the custody clock: cases where an accused is in
+custody and no chargesheet is filed, with days remaining against the statutory
+period. The BNSS 60/90-day rule lives in **exactly one function**, called by this
+screen, the mail digest and the downloadable report, so the three can never disagree
+about a deadline. Investigation pendency is reported **separately and labelled**,
+because it carries no automatic legal consequence.
+
+**Downloadable compliance report** — `GET /api/compliance/report.pdf` returns the
+whole picture laid out for A4, built from the same cached payload the JSON endpoint
+serves, so the document cannot disagree with the screen it came from.
+
+**Criminal network analysis** — a radial hub-and-spoke graph grounded in real
+co-accused cases: the focus person at the centre, direct links on an inner ring and
+second-degree links on an outer ring. Every edge traces to the actual linking
+`CrimeNo`, shown on hover. Registering an FIR with multiple accused auto-creates the
+links; gang tagging feeds organised-crime clustering.
+
+**Case investigation** — enter a `CrimeNo` for the full dossier: accused, victims,
+incident coordinates with an embedded map and directions, and police, officer and
+court details from the official schema. Investigators can advance investigation
+status; supervisors and admins can close a case (two-tier RBAC).
+
+**Offender profiling** — repeat-offender ranking with an explainable 0–100 risk
+score, primary modus operandi and full case history, drillable from any accused.
+
+**Hotspot map** — geographic distribution with district hotspots and 90-day
+emerging-surge alerts.
+
+**Sociological insights** — accused breakdown by age, gender, socio-economic
+status, education, occupation and urban/rural, plus social-risk-factor correlations.
+
+**Decision support** — automated case summaries, timelines, investigative leads and
+similar-case matching with outcomes.
+
+**Financial analysis** — suspicious money-trail tracing, layering detection and
+per-account aggregates. Labelled as a demo integration; production would connect to
+bank or FIU-IND feeds.
+
+**Forecasting and trends** — next-month projection with an 80% interval, district
+early-warning alerts, and seasonal plus festival-window analysis.
+
+**Legal-section queries** — ask by section (*"cases under IPC 302"*, *"section 379
+in Mysuru"*, *"u/s 420"*) and the engine maps it to the offence type.
+
+**Governance** — HMAC-signed tokens, PBKDF2 password hashing, four operational
+roles with per-tab and per-action authorisation, and a persisted, supervisor-visible
+audit log.
+
+---
+
+## Getting started
 
 ### Prerequisites
-- Python 3.8+ and Node.js 16+
-- (Optional, for the AI upgrade) [Ollama](https://ollama.com) with `qwen2.5:3b`
+
+- Python 3.11+ and Node.js 16+
+- Optional: [Ollama](https://ollama.com) with `qwen2.5:3b` for the local-LLM path
 
 ### Backend
+
 ```bash
 cd backend
 pip install -r requirements.txt
-python generate_narrative_data.py   # first run — seed crimes, persons, gangs, FIRs, finance
-python migrate_to_fir_schema.py     # first run — project into the official FIR schema
-python src/nlp/train_model.py       # first run — train the NLP model
-python main.py                      # serves at http://localhost:8004
-# (main.py also auto-seeds + projects on first boot if the DB is empty)
+python main.py            # http://localhost:8004
+```
+
+First boot seeds the dataset and projects it into the official FIR schema
+automatically when the database is empty. To do it explicitly:
+
+```bash
+python generate_narrative_data.py   # crimes, persons, gangs, FIRs, finance
+python migrate_to_fir_schema.py     # project into the official FIR schema
+python src/nlp/train_model.py       # train the intent classifier
 ```
 
 ### Frontend
+
 ```bash
 cd frontend
 npm install
-npm start                           # serves at http://localhost:3000
+npm start                 # http://localhost:3000
 ```
 
-### (Optional) AI service with Ollama
-```bash
-ollama pull qwen2.5:3b
-# the decoupled AI service (FastAPI + Ollama) is wired via env config
-```
-
-### Demo credentials (role-based access — Area 10)
-| Username | Password | Role | Sees |
-|----------|----------|------|------|
-| investigator | invest@2024 | investigator | AI Assistant, Dashboard, Network, Map, Profiles, Case Investigation |
-| analyst | analyst@2024 | analyst | + Insights, Finance, Forecast |
-| supervisor | super@2024 | supervisor | everything + AUDIT |
-| policymaker | policy@2024 | policymaker | Dashboard, Map, Insights, Forecast (high-level) |
-
-Write permissions: **investigator, officer, supervisor, admin** can register FIRs
-and advance status; **only supervisor/admin** can close a case; **analyst and
-policymaker are read-only**. (Legacy `officer / ksp@2024` and `admin / admin@2024`
-still work.)
+> **Catalyst services are unavailable locally.** The SDK builds its credentials
+> from headers the AppSail gateway attaches to each request, and there is no gateway
+> on `localhost`. Zia, Stratus, Cache and Mail therefore decline, and each feature
+> falls back to its documented alternative while naming which engine answered. To
+> exercise the Catalyst path, use the deployed URL.
 
 ---
 
-## Configuration (backend env)
+## Configuration
 
-See `backend/.env.example`. Key variables:
+Backend configuration is environment-driven; see [`backend/.env.example`](backend/.env.example).
+For the deployed app these live in `app-config.json`, which is **gitignored** because
+it carries secrets — copy [`app-config.example.json`](app-config.example.json), which
+documents every variable.
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `DATABASE_URL` | SQLite (dev) | PostgreSQL connection string in production; needs `?sslmode=require` on most managed providers |
-| `KSP_AUTOSEED` | `true` | **Set `false` on a persistent database** so real data is never re-seeded |
-| `KSP_SECRET_KEY` | dev value | Token signing secret — must be overridden in prod (`python -c "import secrets; print(secrets.token_hex(32))"`) |
-| `KSP_AUTH_REQUIRED` | `true` | Set `false` for local demos |
-| `KSP_CORS_ORIGINS` | localhost:3000 | Allowed frontend origins (unused on AppSail — same origin) |
-| `KSP_EXPOSE_SQL` | `false` | Expose generated SQL (debug only) |
-| `KSP_DB_POOL_RECYCLE` / `_SIZE` / `_MAX_OVERFLOW` | 280 / 5 / 10 | Pool tuning for managed PostgreSQL |
+|---|---|---|
+| `DATABASE_URL` | SQLite (dev) | `sqlite:////tmp/ksp_crime_ai.db` on AppSail, paired with `KSP_STRATUS_BUCKET`. A PostgreSQL URL also works and is the scale-out route |
+| `KSP_STRATUS_BUCKET` | — | Catalyst Stratus bucket holding the database snapshot. Without it, ephemeral SQLite would silently lose every write, and `deploy.ps1` refuses to deploy |
+| `KSP_AUTOSEED` | `true` | **Set `false` in production** so real data is never re-seeded |
+| `KSP_SECRET_KEY` | dev value | Token signing secret. Must be overridden: `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `KSP_JOB_TOKEN` | empty | **Second authentication path — read before setting.** Shared secret letting a Catalyst cron call the digest endpoint. Accepted on that one route only, constant-time compared. Empty disables the scheduled digest entirely |
+| `KSP_DIGEST_HOUR` | `7` | Local hour (Asia/Kolkata) for the daily digest cron |
+| `MAIL_FROM` / `KSP_DIGEST_TO` | empty | Catalyst Mail sender and recipients. The sender must be **registered in the Catalyst console** or delivery is rejected |
+| `KSP_NLP_PROVIDER` | `ollama` | `rules` in the cloud, since Ollama cannot run on Catalyst |
+| `KSP_AUTH_REQUIRED` | `true` | `false` for local demos only |
+| `KSP_EXPOSE_SQL` | `false` | Expose generated SQL. Debug only |
+| `KSP_CACHE_SEGMENT_ID`, `KSP_FILESTORE_FOLDER_ID` | empty | Optional Catalyst resources |
 
-For the deployed app these live in `app-config.json` (gitignored — copy
-`app-config.example.json`) and can be overridden in the Catalyst console.
-See **[DATABASE.md](DATABASE.md)** and **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+`deploy.ps1` refuses to deploy on a bad configuration: a placeholder or short
+signing key, ephemeral SQLite with no Stratus bucket, autoseed left on, or a
+`KSP_JOB_TOKEN` that is short, a placeholder, or a duplicate of the signing key.
 
-Frontend: `REACT_APP_API_BASE` (default `http://localhost:8004`).
+Frontend: `REACT_APP_API_BASE` — empty means same-origin, which is what the
+production build uses.
 
 ---
 
-## API Overview
+## API reference
 
 | Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/api/login` | — | Authenticate, returns token |
-| POST | `/api/chat` | ✓ | Conversational query (+ follow-ups, detail, summary) |
-| GET | `/api/stats` | ✓ | Dashboard analytics |
-| GET | `/api/reference/registration`, `/api/gangs` | register roles | Form dropdown data + gang search |
-| POST | `/api/crimes` | register roles | Register a new FIR (write) |
-| PATCH | `/api/crimes/{crimeNo}` | investigator/supervisor/admin | Update status / close case |
-| PATCH | `/api/person/{id}/photo` | register roles | Add/replace an accused photo |
-| GET | `/api/crime/{crimeNo}` | ✓ | Full case dossier (Case Investigation) |
-| GET | `/api/network/overview`, `/api/network/search`, `/api/network/person/{id}` | ✓ | Grounded co-accused network + offender search |
-| GET | `/api/hotspots`, `/api/patterns/mo`, `/api/trends/seasonal` | ✓ | Hotspots, modus operandi, seasonal/festival trends |
-| GET | `/api/sociological` | ✓ | Demographic + social-risk-factor insights |
-| GET | `/api/offenders`, `/api/offenders/{id}` | ✓ | Risk-ranked profiles |
-| GET | `/api/cases/{fir}/summary`, `/similar` | ✓ | Decision support |
-| GET | `/api/clearance`, `/api/officer-caseload` | ✓ | Arrest/clearance rates + officer caseload |
-| GET | `/api/financial/trails` | ✓ | Money-trail analysis (demo integration) |
-| GET | `/api/forecast` | ✓ | Forecast + early-warning alerts |
-| GET | `/api/audit` | supervisor | Audit log |
+|---|---|---|---|
+| `POST` | `/api/login` | — | Authenticate; returns a signed token |
+| `POST` | `/api/chat` | any role | Conversational query, follow-ups, case summary |
+| `POST` | `/api/narrative/analyse` | register roles | **Statement analysis via Zia**, with a rule-based fallback |
+| `POST` | `/api/crimes` | register roles | Register a new FIR |
+| `PATCH` | `/api/crimes/{crimeNo}` | investigator/supervisor/admin | Advance status or close a case |
+| `PATCH` | `/api/person/{id}/photo` | register roles | Add or replace an accused photograph |
+| `GET` | `/api/crime/{crimeNo}` | any role | Full case dossier |
+| `GET` | `/api/stats` | any role | Dashboard analytics |
+| `GET` | `/api/network/overview`, `/search`, `/person/{id}` | any role | Co-accused network and offender search |
+| `GET` | `/api/hotspots`, `/api/patterns/mo`, `/api/trends/seasonal` | any role | Hotspots, modus operandi, seasonal trends |
+| `GET` | `/api/sociological` | any role | Demographic and social-risk insights |
+| `GET` | `/api/offenders`, `/api/offenders/{id}` | any role | Risk-ranked profiles |
+| `GET` | `/api/cases/{fir}/summary`, `/similar` | any role | Decision support |
+| `GET` | `/api/clearance`, `/api/officer-caseload` | any role | Arrest/clearance rates, caseload |
+| `GET` | `/api/financial/trails` | any role | Money-trail analysis |
+| `GET` | `/api/forecast`, `/api/model/metrics` | any role | Forecast, early warning, model metrics |
+| `GET` | `/api/compliance/report` | any role | Custody clock, pendency, stations, officers |
+| `GET` | `/api/compliance/report.pdf` | any role | **The same report as a document** |
+| `GET` | `/api/compliance/custody-clock`, `/stations` | any role | Individual compliance views |
+| `GET` | `/api/compliance/digest` | any role **or** scheduler token | Custody digest; `?send=true` delivers |
+| `GET` | `/api/audit` | supervisor/admin | Audit log |
+| `GET` | `/api/system/info` | any role | Database backend and whether persistence is **observed** |
+| `GET` | `/api/system/services` | any role | **The auditable Catalyst service inventory** |
+| `GET` | `/api/system/catalyst-probe`, `/zia-probe` | any role / admin | SDK diagnostics |
+| `GET` | `/api/system/jobs` · `POST /api/system/jobs/digest` | admin | Inspect and create the digest schedule |
+
+Interactive schema: [`/docs`](https://ksp-api-50044161264.development.catalystappsail.in/docs)
+on the deployed app.
 
 ---
 
-## Testing
+## Testing and verification
+
 ```bash
 cd backend
-pytest -q          # 13 smoke tests: auth, queries, Kannada, RBAC, intelligence
+python -m pytest tests -q          # 75 tests
 ```
+
+> Use `python -m pytest tests`, not bare `pytest` — the latter walks
+> `backend/vendor/` and dies collecting SQLAlchemy's own test suite.
+
+The suite covers auth and RBAC, the query flows including Kannada, the Catalyst
+wrappers and their fallbacks, Zia response parsing against fixtures copied verbatim
+from a live probe, the scheduler token, HTML escaping, and — unusually — **the
+truthfulness of the service inventory**. Two of those tests exist because two
+inventory reason strings were once false; a wrong reason in an honesty document is
+worse than an admitted gap.
+
+### Verification harnesses
+
+Claims about a deployed system should be checkable, so the checks are committed:
+
+| Script | Verifies |
+|---|---|
+| `verify_endpoints.ps1` | Every endpoint, driven off the served `/openapi.json` so the list cannot drift. 37 endpoints plus the React bundle |
+| `verify_deploy.ps1` → `deploy.ps1` → `verify_restart.ps1` | The persistence round trip: register an FIR, redeploy (wiping `/tmp`), confirm the FIR survived |
+| `verify_narrative.ps1` | Zia answers on the real request path and the inventory reports it live |
+| `verify_jobs.ps1` | The scheduler token authenticates the digest, a wrong token is refused, and it opens no other route |
+| `verify_services.ps1` | The service map, and that cached endpoints report their tier |
+| `verify_deploy_guard.ps1` | `deploy.ps1` blocks bad configurations. Runs against temporary copies; never touches the real config |
+| `zia_probe.ps1`, `probe.ps1` | Raw SDK responses |
 
 ---
 
-## Deployment (Zoho Catalyst AppSail)
+## Deployment
 
-The whole platform runs as a **single Catalyst AppSail service** — the FastAPI app
-serves both the React build and the `/api/...` endpoints from one origin, so police
-stations access everything through a browser with nothing installed locally, and
-there are no CORS/preflight issues.
+The platform runs as a **single Catalyst AppSail service**: one FastAPI process
+serves both the React build and `/api/...`, so stations need only a browser and
+there are no CORS or preflight issues.
 
-### One-command deploy
-From the project root:
 ```powershell
 ./deploy.ps1
 ```
-This (1) builds the React frontend, (2) copies the build into `backend/static`,
-(3) vendors Linux (`manylinux`) Python wheels into `backend/vendor` if missing,
-and (4) runs `catalyst deploy`. Live URL:
-`https://ksp-api-50044161264.development.catalystappsail.in`
 
-### Notes on AppSail
-- AppSail does **not** run `pip install` on the server, so Linux wheels are
-  **vendored** with the app (handled by `vendor-deps.ps1` / `deploy.ps1`).
-- `main.py` binds to Catalyst's `X_ZOHO_CATALYST_LISTEN_PORT`.
-- The database is **managed PostgreSQL**, set via `DATABASE_URL`, so data survives
-  restarts and redeploys and is shared across instances. Auto-seeding is turned
-  **off** in production (`KSP_AUTOSEED=false`) and in any case only ever runs on an
-  empty database, so real data is never overwritten. `GET /api/system/info` reports
-  the active backend and whether storage is persistent. Do **not** point
-  `DATABASE_URL` at SQLite on AppSail: the app directory is read-only and `/tmp` is
-  ephemeral, so every restart would wipe the data. See **[DATABASE.md](DATABASE.md)**.
-- In the cloud `KSP_NLP_PROVIDER=rules` is used (Ollama can't run on Catalyst);
-  the heavy ML stack (scikit-learn/numpy) is optional and a keyword classifier is
-  used instead.
-- The **AI service (Ollama)** is optional and decoupled — run it on a GPU server
-  (on-premise for data sovereignty); if unreachable the app falls back to
-  rule-based NLP, so it never goes down.
+Five stages: validate configuration, build the React app, copy it into
+`backend/static`, verify every dependency is vendored, deploy. It fails loudly
+rather than reporting success over a failed deploy, and it checks the Catalyst CLI
+is logged in first — a stale session otherwise reports itself as
+`Org and Project Id cannot be empty`, which reads like a configuration error.
 
-Full step-by-step guide (CLI setup, wheel vendoring, env vars, troubleshooting):
-see **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+Notes specific to AppSail:
 
-### Docker (alternative)
-Docker artifacts (`backend/Dockerfile`, `frontend/Dockerfile`,
-`docker-compose.yml`) are provided for container/VM hosting.
+- It does **not** run `pip install` on the server, so Linux `manylinux` wheels are
+  vendored into `backend/vendor` (`vendor-deps.ps1`, keyed on a hash of
+  `requirements.txt` so a new dependency re-vendors automatically).
+- `main.py` binds to `X_ZOHO_CATALYST_LISTEN_PORT`.
+- `KSP_NLP_PROVIDER=rules` in the cloud; the heavy ML stack is optional, and both
+  models ship as coefficients for pure-Python inference.
+- SQLite on `/tmp` **plus a Stratus bucket** is the supported configuration.
+  Bare ephemeral SQLite is rejected by the deploy guard.
+
+Full guide including CLI setup and troubleshooting: **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+Docker artifacts are provided for container or VM hosting as an alternative.
 
 ---
 
-## Security & Privacy
-- Parameterized SQL throughout (injection-safe); the LLM never generates SQL.
-- PBKDF2-hashed passwords; HMAC-signed session tokens; role-based access.
-- Every query is written to a persisted audit log for accountability.
-- AI can run fully on-premise — sensitive crime data never leaves government
-  infrastructure.
+## Measured models
 
----
-
-## Two measured models (not heuristics)
-
-Both report an honest metric, and both run as pure Python at inference time so the
-slim cloud build needs no scikit-learn or numpy.
+Both report an honest metric and run as pure Python at inference time.
 
 | Model | What it does | Validation | Result |
-|-------|--------------|-----------|--------|
+|---|---|---|---|
 | Offender risk | Ranks repeat offenders by reoffence risk | Held-out test split | ROC-AUC **0.992**, accuracy **0.977** |
-| Crime-volume forecast | Projects the incident count for the coming month | Walk-forward one-step-ahead backtest over 16 held-out months | Reported live; typically 15-25% lower MAE than a naive baseline |
+| Crime-volume forecast | Projects next month's incident count | Walk-forward one-step-ahead backtest over 16 held-out months | Reported live; typically 15–25% lower MAE than a naive baseline |
 
 The forecaster is *selected* by the backtest: ten candidates (naive, moving
 averages, drift, seasonal naive, linear trend, damped trend, SES, Holt damped) are
-each scored one-step-ahead, and the lowest-MAE method wins. The in-progress
-calendar month is excluded so a partial count can't drag the trend down, and the
-point forecast carries an 80% interval derived from the measured backtest RMSE
-rather than an assumed variance.
+each scored one-step-ahead and the lowest-MAE method wins. The in-progress calendar
+month is excluded so a partial count cannot drag the trend down, and the point
+forecast carries an 80% interval derived from measured backtest RMSE rather than an
+assumed variance.
 
-> **The forecast row is deliberately not a fixed number.** Which method wins and
-> what error it achieves both depend on the seeded series, which regenerates
-> relative to the current date — across three re-seeds this selected `holt_damped`,
-> `ma_trend` and `holt_damped` again, at MAE 10.18, 9.11 and 8.18. Quoting one of
-> those as *the* result would be stale within a day. The FORECAST tab and
-> `GET /api/forecast` report the live figures; treat those as authoritative.
->
-> The offender-risk figure is stable because that model is trained once and its
-> metrics are stored alongside it in `backend/models/risk_model.json`.
+> **The forecast row is deliberately not a fixed number.** Which method wins depends
+> on the seeded series, which regenerates relative to the current date — across three
+> re-seeds it selected `holt_damped`, `ma_trend` and `holt_damped` at MAE 10.18, 9.11
+> and 8.18. Quoting one as *the* result would be stale within a day. `GET /api/forecast`
+> reports the live figures. The offender-risk figure is stable because that model is
+> trained once and its metrics are stored beside it in `backend/models/risk_model.json`.
 
-Both models surface their metrics in the UI next to the numbers they produce, so a
-reviewer can see what each is worth.
-
-Simple models are deliberate here: with ~2 years of monthly history a
+Simple models are deliberate: with roughly two years of monthly history a
 high-capacity model would overfit, and a measured error against a baseline is more
-defensible than an unvalidated complex one.
+defensible than an unvalidated complex one. Both surface their metrics in the UI
+next to the numbers they produce.
+
+---
+
+## Security
+
+- **Parameterised SQL throughout.** The language layer never generates SQL.
+- **PBKDF2-HMAC-SHA256 password hashing**, HMAC-SHA256 signed session tokens,
+  constant-time comparison.
+- **Four roles** with per-tab and per-action authorisation. Analysts and
+  policymakers are read-only; only supervisors and admins can close a case.
+- **Persisted audit log**, visible to supervisors.
+- **HTML escaping** on every value interpolated into the mail digest and the
+  downloadable report.
+- **One additional authentication path**, and it is deliberately narrow: a Catalyst
+  cron cannot hold a session, so the digest endpoint also accepts a shared secret in
+  `X-KSP-Job-Token`. It is not a reusable dependency, it is off unless configured,
+  it enforces a 32-character minimum in the backend as well as the deploy script,
+  and the principal it returns cannot satisfy any role check. Tests assert it opens
+  no other route and that no endpoint ever echoes it.
+- **On-premise capable.** The optional LLM path runs on infrastructure you control,
+  so sensitive text need not leave government systems.
+
+---
+
+## Data provenance
+
+**All data is synthetic. Nothing here represents a real person or case.**
+
+District and offence-type mixes live in
+[`karnataka_crime_reference.json`](backend/data/reference/karnataka_crime_reference.json),
+where each block records its own `basis` and `source`. They are labelled
+**illustrative** — chosen to be plausible, *not* derived from published crime
+statistics. One association is planted deliberately: the age–crime curve, the most
+robust finding in criminology. [CAPABILITIES.md](CAPABILITIES.md) states which
+patterns are real signal and which are artefacts of the generator, because a
+sociological insight drawn from invented data is a demonstration of the pipeline,
+not a finding about Karnataka.
+
+---
+
+## Documentation index
+
+| Document | Contents |
+|---|---|
+| **[CAPABILITIES.md](CAPABILITIES.md)** | The six scored capabilities, each with its gaps stated. Platform section, what the SDK cost to establish, and what is not working and why |
+| **[DEMO.md](DEMO.md)** | Scripted walkthrough for a recording: which screen evidences which capability, with timings |
+| **[DEPLOYMENT.md](DEPLOYMENT.md)** | Catalyst CLI setup, wheel vendoring, environment variables, troubleshooting |
+| **[DATABASE.md](DATABASE.md)** | Schema, the persistence design, and connection pooling |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Layer-by-layer detail |
+| [docs/api_contract.md](docs/api_contract.md) | Request and response shapes |
+| [docs/intent_taxonomy.md](docs/intent_taxonomy.md) | Supported intents and entity grammar |
 
 ---
 
 ## Roadmap
-- Load real/realistic KSP data (financial, gangs, and demographics are currently
-  synthetic; the official schema is ready to receive real data).
-- Move accused photos from base64 database blobs to Catalyst File Store.
-- Unify victims / locations / financial accounts into the network graph.
-- Grow the automated test suite to cover the newer endpoints.
+
+- **Load real KSP data.** The official schema is ready to receive it; financial,
+  gang and demographic data are currently synthetic.
+- **Zia OCR on scanned complaints.** Zia ships an Aadhaar-specific OCR model, which
+  is a natural fit for populating a person record from an identity document. It needs
+  a file-upload path and real scanned documents.
+- **Multi-instance persistence.** The Stratus snapshot is single-instance by design;
+  PostgreSQL is the scale-out route and is already supported.
+- **Move accused photographs** out of database blobs into Catalyst File Store.
+- **Unify victims, locations and financial accounts** into the network graph.
+- **Broaden the automated suite** over the newer analytical endpoints.
 
 ---
 
 ## Acknowledgments
-Built for Karnataka State Police. Synthetic data only — no real PII.
+
+Built for the Karnataka State Police conversational-crime-intelligence challenge.
+Synthetic data only — no real PII.

@@ -129,13 +129,29 @@ Copy-Item app-config.example.json app-config.json
 
 | Key | Value |
 |-----|-------|
-| `DATABASE_URL` | your PostgreSQL connection string, e.g. `postgresql://user:pw@host/db?sslmode=require` |
+| `DATABASE_URL` | `sqlite:////tmp/ksp_crime_ai.db` — paired with `KSP_STRATUS_BUCKET` below. A PostgreSQL URL (`postgresql://user:pw@host/db?sslmode=require`) also works and is the scale-out route |
+| `KSP_STRATUS_BUCKET` | the Catalyst Stratus bucket holding the database snapshot, e.g. `ksp-crime-ai`. Create it in the console first (Stratus → Create Bucket, Authenticated access). The name becomes a DNS host, so lowercase and hyphens only |
 | `KSP_NLP_PROVIDER` | `rules` (Ollama can't run on Catalyst) |
 | `KSP_SECRET_KEY` | 64 hex chars: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `KSP_AUTOSEED` | `false` on a persistent database, so real data is never re-seeded |
+| `KSP_JOB_TOKEN` | optional. 32+ random chars, and never the same value as `KSP_SECRET_KEY`. Leave empty to disable the scheduled digest |
+| `MAIL_FROM` / `KSP_DIGEST_TO` | optional. The sender must be **registered in the Catalyst console** or Mail rejects the send with `INVALID_ID: No such from_email` |
 
-> Do **not** use `sqlite:////tmp/...` here. `/tmp` on AppSail is ephemeral, so every
-> restart wipes the data — this was the original persistence bug. PostgreSQL only.
+> **This guidance changed.** It previously said "PostgreSQL only — do not use
+> `sqlite:////tmp/...`", because `/tmp` on AppSail is wiped on restart and bare
+> ephemeral SQLite silently lost every write. That was the original persistence bug.
+> It is now solved on Catalyst itself: the SQLite file is snapshotted to **Stratus**
+> after each write and restored on the first request after a boot, which is verified
+> end to end by `verify_deploy.ps1` → `deploy.ps1` → `verify_restart.ps1`.
+>
+> Bare ephemeral SQLite is still wrong, and `deploy.ps1` refuses to deploy it — the
+> guard blocks a `/tmp` SQLite path with no `KSP_STRATUS_BUCKET` set.
+>
+> One real limit: the whole file is the unit of transfer, so this is
+> **single-instance** — with more than one running instance the last writer wins.
+> PostgreSQL remains supported and is the answer at that point.
+> `GET /api/system/info` reports which mode is active and whether the snapshot round
+> trip has actually been observed, rather than whether it is merely configured.
 
 **Catalyst console → AppSail → Configuration (override).** Per the
 [AppSail configuration docs](https://docs.catalyst.zoho.com/en/serverless/help/appsail/console/configurations/),

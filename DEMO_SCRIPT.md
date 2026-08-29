@@ -1,12 +1,17 @@
 # KSP Crime AI — Demo Script
 
+> **See [DEMO.md](DEMO.md) first.** That is the current script: it opens on the
+> custody clock, centres on Catalyst Zia reading a complainant statement, closes on
+> the service map, and carries verified figures plus a "do not claim on camera" list.
+> This file is kept for its story framing and its Q&A prep, both of which still hold.
+
 A tight, story-driven walkthrough for judges. One connected narrative beats a
 feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pace),
 ~5 minutes for the full run.
 
 > **Honest framing (say this up front):** "All data is synthetic with planted
 > patterns; the platform runs on the **official Karnataka Police FIR schema**,
-> stores everything in **persistent PostgreSQL**, and the ML/analytics pipeline is
+> persists to **Catalyst Stratus**, and the ML/analytics pipeline is
 > ready to retrain on real KSP data with no code changes."
 
 ---
@@ -54,17 +59,18 @@ feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pac
    advance a case; only supervisors can close it — role-based access, and every
    action is audited."*
 
-7. **Prove it persists.** → Restart the backend (or redeploy), then reopen CASE
-   INVESTIGATION and pull the same CrimeNo. **Say:** *"The record survives a
-   restart, because this runs on managed PostgreSQL rather than a temporary file.
-   Earlier it ran on SQLite in an ephemeral directory, so every restart wiped the
-   data — that's fixed, and `/api/system/info` reports the storage mode so you
-   never have to guess."*
+7. **Prove it persists.** → Redeploy, then reopen CASE INVESTIGATION and pull the
+   same CrimeNo. **Say:** *"The record survives a restart. AppSail's /tmp is wiped
+   every time, so the database file is snapshotted to Catalyst Stratus after each
+   write and restored on the first request after a boot. Earlier it ran on bare
+   ephemeral SQLite and every restart wiped the data — that's fixed, and
+   `/api/system/info` reports the storage mode so you never have to guess."*
 
    > **Film this beat.** Persistence was the platform's weakest point, so showing
    > register → restart → still-there is the single most convincing moment in the
-   > demo. Show `/api/system/info` returning `"backend": "postgresql"`,
-   > `"persistent": true`.
+   > demo. Show `/api/system/info` returning `"backend": "sqlite"`,
+   > `"persistent": true` and `"restore_result": "restored"` — the last field is the
+   > proof, since it means this instance booted empty and pulled the data back.
 
 ---
 
@@ -107,11 +113,15 @@ feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pac
   its own basis and source, so recalibrating against NCRB or KSP figures is a data
   edit, not a code change. The database is the **official KSP FIR schema**
   (18-digit CrimeNo), so real data drops in without code changes.
-- **"Does the data survive a restart?"** — Yes. Managed PostgreSQL, shared across
-  instances, verified by registering an FIR and redeploying. `/api/system/info`
-  reports the active backend and whether storage is persistent. Auto-seeding is off
-  in production and in any case only runs on an empty database, so real data can
-  never be overwritten by the demo seeder.
+- **"Does the data survive a restart?"** — Yes, verified by registering an FIR and
+  redeploying. The SQLite file is snapshotted to Catalyst Stratus after each write
+  and restored on the first request after a boot, so nothing external to Catalyst is
+  involved. `/api/system/info` reports the mode and whether the round trip has
+  actually been observed, not merely configured. Be straight about the limit if
+  asked: the whole file is the unit of transfer, so it is single-instance — with more
+  than one instance the last writer wins, and PostgreSQL is the answer at that scale.
+  Auto-seeding is off in production and in any case only runs on an empty database,
+  so real data can never be overwritten by the demo seeder.
 - **"What about privacy / data sovereignty?"** — Parameterized SQL (injection-safe),
   hashed passwords, role-based access, full audit log, and the optional LLM runs
   on-premise — sensitive data never leaves government infrastructure.
