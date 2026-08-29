@@ -7,8 +7,8 @@
 		"_comment_db": "SQLite on /tmp is the AppSail path: the app directory is read-only and /tmp is writable. /tmp is also wiped on restart, so KSP_STRATUS_BUCKET below is what makes writes durable. A PostgreSQL connection string also works and is the production scale-out route.",
 		"DATABASE_URL": "sqlite:////tmp/ksp_crime_ai.db",
 
-		"_comment_stratus": "Catalyst Stratus bucket. The whole SQLite file is snapshotted here after each write and restored on the first request after a restart. Without this, ephemeral SQLite silently loses every write and deploy.ps1 refuses to deploy.",
-		"KSP_STRATUS_BUCKET": "REPLACE_WITH_STRATUS_BUCKET_NAME",
+		"_comment_stratus": "Catalyst Stratus bucket. The whole SQLite file is snapshotted here after each write and restored on the first request after a restart. Without this, ephemeral SQLite silently loses every write and deploy.ps1 refuses to deploy. The bucket must already exist in your Catalyst project (Stratus > Create Bucket, Authenticated access). The name becomes a DNS host, so use lowercase and hyphens only.",
+		"KSP_STRATUS_BUCKET": "ksp-crime-ai",
 
 		"_comment_optional": "Optional Catalyst services. Each degrades to a documented fallback when unset, and GET /api/system/services reports the real status.",
 		"KSP_FILESTORE_FOLDER_ID": "",

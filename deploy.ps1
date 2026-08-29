@@ -147,8 +147,44 @@ if ($missing.Count -gt 0) {
 Write-Host "      all dependencies present." -ForegroundColor DarkGray
 
 Write-Host "[5/5] Deploying to Catalyst AppSail..." -ForegroundColor Cyan
-catalyst deploy
+# The CLI resolves the org and project from its stored login session, not from
+# any file in this repo. When the session is missing or expired, 'catalyst
+# deploy' fails with "Org and Project Id cannot be empty." which reads like a
+# config problem but is really a logged-out CLI. Check first so the message is
+# actionable.
+$who = (& catalyst whoami 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($who) -or $who -notmatch "@") {
+    Write-Host "`nDeploy blocked - the Catalyst CLI is not logged in." -ForegroundColor Red
+    Write-Host "Run this in your own terminal (it opens a browser and cannot be automated):" -ForegroundColor Red
+    Write-Host "  catalyst login" -ForegroundColor Yellow
+    Write-Host "Then re-run this script." -ForegroundColor Red
+    exit 1
+}
+Write-Host "      logged in as: $who" -ForegroundColor DarkGray
 
-Write-Host "`nDone. Live at: https://ksp-api-50044161264.development.catalystappsail.in" -ForegroundColor Green
-Write-Host "Verify persistence: GET /api/system/info should report" -ForegroundColor Yellow
-Write-Host '  "backend": "postgresql", "persistent": true, "autoseed_enabled": false' -ForegroundColor Yellow
+catalyst deploy
+# 'catalyst deploy' returns a non-zero exit code on failure but keeps printing
+# to stdout, so without this check the script used to announce a successful
+# deploy over the top of a failed one.
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "`nDEPLOY FAILED (catalyst exit code $LASTEXITCODE). Nothing was published." -ForegroundColor Red
+    Write-Host "Read the catalyst output above for the cause. Common ones:" -ForegroundColor Red
+    Write-Host "  - 'Org and Project Id cannot be empty'  -> run 'catalyst login', then retry" -ForegroundColor Yellow
+    Write-Host "  - a Python import error at boot          -> a dependency is missing from backend/vendor" -ForegroundColor Yellow
+    exit 1
+}
+
+$baseUrl = "https://ksp-api-50044161264.development.catalystappsail.in"
+Write-Host "`nDone. Live at: $baseUrl" -ForegroundColor Green
+Write-Host "Verify persistence: GET $baseUrl/api/system/info should report" -ForegroundColor Yellow
+if ($isEphemeral) {
+    Write-Host '  "database": { "backend": "sqlite", "persistent": true, "autoseed_enabled": false }' -ForegroundColor Yellow
+    Write-Host '  "persistence": { "mechanism": "stratus", "bucket": "' -NoNewline -ForegroundColor Yellow
+    Write-Host ($bucket + '", "uploads_completed": >0 }') -ForegroundColor Yellow
+    Write-Host "Note: uploads_completed stays 0 until the first write lands, so register an FIR first." -ForegroundColor DarkGray
+} elseif ($isSqlite) {
+    Write-Host '  "database": { "backend": "sqlite", "persistent": true, "autoseed_enabled": false }' -ForegroundColor Yellow
+} else {
+    Write-Host '  "database": { "backend": "postgresql", "persistent": true, "autoseed_enabled": false }' -ForegroundColor Yellow
+}
+Write-Host "Also check GET $baseUrl/api/system/services for the live/degraded service map." -ForegroundColor Yellow

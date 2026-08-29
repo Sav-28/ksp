@@ -170,12 +170,24 @@ def restore_once() -> Dict[str, Any]:
             log.warning("Refusing to restore: remote copy is only %d bytes.", len(data))
             return status()
 
-        # Identical to what is already on disk - nothing to do, and swapping
+        # Byte-identical to what is already on disk - nothing to do, and swapping
         # would needlessly drop live connections.
+        #
+        # This compares CONTENT, not size. Size is not a safe proxy: SQLite grows
+        # the file in 4096-byte pages, so inserting a row that fits in existing
+        # free space leaves the file exactly the same length. Comparing sizes
+        # would then report 'already-current' and keep the bundled database,
+        # silently discarding the very writes this restore exists to recover.
         try:
-            if os.path.isfile(path) and os.path.getsize(path) == len(data):
-                _state["restore_result"] = "already-current"
-                return status()
+            if os.path.isfile(path):
+                import hashlib
+                local = hashlib.sha256()
+                with open(path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                        local.update(chunk)
+                if local.hexdigest() == hashlib.sha256(data).hexdigest():
+                    _state["restore_result"] = "already-current"
+                    return status()
         except OSError:
             pass
 
@@ -243,8 +255,12 @@ def flush(force: bool = False) -> Dict[str, Any]:
                 _state["last_flush_error"] = None
                 log.info("Database persisted to Stratus (%.1f MB).", len(data) / 1048576)
             else:
-                # Left dirty on purpose so the next tick retries.
-                _state["last_flush_error"] = "Stratus put returned false"
+                # Left dirty on purpose so the next tick retries. The reason
+                # comes from the wrapper so this is diagnosable from the API
+                # rather than only from the container log.
+                _state["last_flush_error"] = (
+                    catalyst.last_error() or "Stratus put returned false"
+                )
         except Exception as exc:
             _state["last_flush_ok"] = False
             _state["last_flush_error"] = f"{type(exc).__name__}: {exc}"
@@ -275,15 +291,41 @@ def start_flusher() -> None:
     log.info("Database flusher started (debounce %ss).", FLUSH_DEBOUNCE_SECONDS)
 
 
+def evidence() -> Optional[str]:
+    """
+    What has actually been OBSERVED about the snapshot round trip, or None.
+
+    Configuration is not evidence, so this reports only completed operations:
+
+      upload   this process has written the database to Stratus, so its own
+               writes are already safe.
+      restore  this process cold-started with an empty /tmp and pulled the
+               database back out of Stratus. That is the stronger observation of
+               the two - it proves a previous instance's writes outlived it,
+               which is the entire claim - so it counts even while this process
+               has not yet had a write of its own to upload.
+
+    Returning None means nothing has been demonstrated yet and callers must not
+    claim persistence.
+    """
+    if not _state["applicable"]:
+        return None
+    if _state["flush_count"] > 0:
+        return "upload"
+    if _state["restore_result"] in ("restored", "already-current"):
+        return "restore"
+    return None
+
+
 def is_persistent() -> bool:
     """
-    True only when writes can actually outlive this instance.
+    True only when the snapshot round trip has been observed in this instance.
 
-    Deliberately strict: it requires a Stratus upload to have SUCCEEDED at least
-    once. Anything weaker would let /api/system/info claim persistence that has
-    never been demonstrated.
+    Deliberately evidence-based rather than configuration-based: a configured
+    bucket proves nothing, and /api/system/info exists to avoid exactly that kind
+    of overstatement. See evidence() for what counts and why.
     """
-    return bool(_state["applicable"] and _state["flush_count"] > 0)
+    return evidence() is not None
 
 
 def status() -> Dict[str, Any]:
@@ -310,6 +352,8 @@ def status() -> Dict[str, Any]:
         "last_upload_ok": _state["last_flush_ok"],
         "last_upload_error": _state["last_flush_error"],
         "writes_survive_restart": is_persistent(),
+        # Names the observation behind the claim above, so it can be checked.
+        "evidence": evidence(),
         "limitation": (
             "Single-instance persistence: the whole file is the unit of transfer, "
             "so with more than one running instance the last writer wins. "

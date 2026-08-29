@@ -206,8 +206,32 @@ reason. Services deliberately not used are listed with the reasoning.
 - **Mail** delivers the custody digest.
 
 `GET /api/system/info` reports the active backend and whether writes actually
-survive a restart — and reports `false` unless a snapshot has genuinely completed,
-rather than claiming persistence because the mechanism is configured.
+survive a restart — and reports `false` unless the snapshot round trip has genuinely
+been observed, rather than claiming persistence because the mechanism is configured.
+
+### What the platform work actually cost
+
+Two things had to be measured rather than read, because the Python SDK's docs pages
+404:
+
+- **The SDK reads its credentials from the calling thread.** AppSail attaches the
+  full `X-ZC-*` header set to every request, but `zcatalyst_sdk.initialize()` finds
+  them only on the exact thread handling that request — so it failed in the
+  background snapshot uploader and in the threadpool worker doing the restore.
+  The middleware now captures those headers and replays them into whichever thread
+  needs the SDK. `GET /api/system/catalyst-probe` publishes the evidence: which
+  headers arrive, and that `initialize()` fails while `initialize(req=request)`
+  succeeds. Credential values are never returned, only presence and length.
+- **Cache rejects items over roughly 16,000 characters.** Found by having a
+  19,812-byte write refused with `LIMIT_REACHED`; Zoho's own sources disagree on the
+  figure. The envelope is therefore gzipped and base64'd before it is stored, which
+  takes `/api/compliance/report` from 19,812 to 3,771 bytes. `/api/hotspots` is
+  ~115 KB and still does not fit, so it is reported as `computed-oversize` and served
+  from the in-process tier — named in the response rather than quietly substituted.
+
+Verified against the deployed instance, not asserted: register an FIR, redeploy so
+`/tmp` is wiped, and the FIR is still there with `restore_result: restored`.
+`verify_deploy.ps1`, `deploy.ps1`, `verify_restart.ps1` run that sequence.
 
 ---
 

@@ -202,11 +202,19 @@ async def catalyst_persistence(request, call_next):
     earliest point a restore is possible. It is guarded to run at most once and
     fails closed, leaving the bundled database in place.
 
+    capture_request_headers() runs FIRST and is what makes the rest possible: the
+    SDK looks for those headers on the calling thread, so without a captured copy
+    to replay, neither the threadpool restore below nor the background uploader
+    could initialise it. Verified on the deployed app via
+    GET /api/system/catalyst-probe.
+
     Marking dirty here rather than uploading here is deliberate — a write must
     not wait on a multi-megabyte upload, so the background flusher does it.
     """
     from starlette.concurrency import run_in_threadpool
-    from src.services import catalyst_store
+    from src.services import catalyst_store, catalyst
+
+    catalyst.capture_request_headers(request.headers)
 
     if not catalyst_store.restored_attempted():
         # Off the event loop: this does network I/O and a file swap.

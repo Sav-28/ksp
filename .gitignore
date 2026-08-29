@@ -81,3 +81,7 @@ app-config.json
 backend/vendor/
 # React build served by the backend on AppSail (regenerated per deploy)
 backend/static/
+
+# Transient output of the deploy/verify scripts (a probe FIR number, a deploy log)
+verify_probe_fir.txt
+deploy_log.txt

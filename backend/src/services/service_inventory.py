@@ -41,6 +41,15 @@ def _sqlite_snapshot_status() -> tuple:
         return ("live",
                 f"{st['uploads_completed']} snapshot upload(s) completed; "
                 f"restore on boot reported '{st.get('restore_result')}'.")
+    # A restore is also a completed Stratus operation, and a stronger one: it
+    # means this instance booted with an empty /tmp and read the database back
+    # out. Reporting that as merely 'configured' because no upload has happened
+    # yet in this process would understate what has been observed.
+    if st.get("restore_result") in ("restored", "already-current"):
+        return ("live",
+                f"Bucket '{bucket}' read successfully on boot: restore reported "
+                f"'{st['restore_result']}'. No upload has been needed yet in this "
+                f"instance, so uploads_completed is 0.")
     if st.get("last_upload_error"):
         return ("configured",
                 f"Bucket '{bucket}' is configured but the last upload failed: "
@@ -54,9 +63,22 @@ def _cache_status() -> tuple:
     s = cache.stats()
     if s["catalyst_cache_available"]:
         hits = s["catalyst_hits"]
-        return ("live" if hits or s["writes"] else "configured",
-                f"{s['writes']} write(s), {s['catalyst_hits']} Catalyst hit(s), "
-                f"{s['local_hits']} in-process hit(s), {s['misses']} miss(es).")
+        detail = (f"{s['writes']} write(s), {s['catalyst_hits']} Catalyst hit(s), "
+                  f"{s['local_hits']} in-process hit(s), {s['misses']} miss(es).")
+        # Rejected writes are named rather than hidden: without this the endpoint
+        # would look healthy while quietly serving everything from the local tier.
+        if s.get("last_write_raw_bytes") and s.get("last_write_bytes"):
+            detail += (f" Last payload compressed {s['last_write_raw_bytes']} -> "
+                       f"{s['last_write_bytes']} bytes against the measured "
+                       f"{s['max_value_bytes']}-byte per-item ceiling.")
+        if s.get("oversize_skips"):
+            detail += (f" {s['oversize_skips']} payload(s) still exceeded the ceiling "
+                       f"after compression and were served from the in-process tier.")
+        if s.get("last_write_error"):
+            detail += f" Last rejected write: {s['last_write_error']}"
+        if s.get("last_read_error"):
+            detail += f" Last failed read: {s['last_read_error']}"
+        return ("live" if hits or s["writes"] else "configured", detail)
     return ("not-configured",
             "The Catalyst SDK could not be initialised for Cache, so the "
             "read-through cache is served by the bounded in-process tier instead. "

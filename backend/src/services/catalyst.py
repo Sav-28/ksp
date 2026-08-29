@@ -32,11 +32,16 @@ codebase never has to guess:
 
 TWO CONSTRAINTS THAT SHAPE EVERY CALLER
 ---------------------------------------
-1. `initialize()` raises CatalystAppError('Catalyst headers are empty') when there
-   are no Catalyst request headers in scope. On AppSail those headers arrive with
-   each HTTP request, so the SDK is usable INSIDE a request and generally not at
-   process start. Off-platform it can only work if CATALYST_AUTH holds a
-   credential JSON. Nothing here may assume initialisation succeeds.
+1. `initialize()` raises CatalystAppError('Catalyst headers are empty') unless the
+   CALLING THREAD carries Catalyst identity headers. It reads them from a dict
+   hung off threading.current_thread(), populated either by
+   `initialize(req=request)` or by the Functions runtime. Measured on the
+   deployed app: AppSail attaches the full x-zc-* header set to every request,
+   `initialize(req=request)` succeeds, and bare `initialize()` fails - including
+   in a threadpool worker or background thread serving that same request.
+   This module therefore captures the headers in the middleware and replays them
+   into whichever thread needs the SDK. Off-platform, CATALYST_AUTH is the only
+   path. Nothing here may assume initialisation succeeds.
 
 2. Stratus is keyed by an arbitrary string; File Store addresses files by a
    numeric id and offers no lookup by name. Anything that must be found again on
@@ -50,7 +55,8 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Mapping, Optional
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +68,86 @@ _state: Dict[str, Any] = {
     "import_error": None,
     "last_init_error": None,
     "init_ok_once": False,    # has initialisation EVER succeeded in this process
+    "last_stratus_error": None,
 }
+
+
+def last_error() -> Optional[str]:
+    """The most specific failure recorded, for callers that report a reason."""
+    return _state["last_stratus_error"] or _state["last_init_error"]
+
+# ---------------------------------------------------------------------------
+# Catalyst identity headers
+# ---------------------------------------------------------------------------
+# Measured on the deployed app via GET /api/system/catalyst-probe: the AppSail
+# gateway attaches x-zc-projectid, x-zc-project-domain, x-zc-project-key,
+# x-zc-project-secret-key, x-zc-environment, x-zc-admin-cred-token/-type and
+# x-zc-user-cred-token/-type to EVERY inbound request. The SDK reads them from a
+# store hung off the CURRENT THREAD (zcatalyst_sdk._thread_util.ZCThreadUtil),
+# which is why zcatalyst_sdk.initialize() succeeds only on the exact thread that
+# is handling a request, and fails with 'Catalyst headers are empty' in a
+# background thread or in a threadpool worker.
+#
+# So the headers of the most recent request are kept here and replayed into
+# whichever thread needs them. That is what makes the background snapshot
+# uploader able to talk to Stratus at all.
+#
+# These headers contain live credentials. They are held in process memory only:
+# never logged, never written to disk, and never returned by any endpoint.
+_creds_lock = threading.Lock()
+_creds: Dict[str, Any] = {
+    "headers": None,        # dict of lowercased x-zc-* header name -> value
+    "captured_at": None,    # monotonic-ish wall clock of the last capture
+    "captures": 0,
+}
+# The one header that proves a request really came through the Catalyst gateway.
+_PROJECT_HEADER = "x-zc-projectid"
+
+
+def capture_request_headers(headers: Mapping[str, str]) -> bool:
+    """
+    Remember the Catalyst identity headers carried by a live request.
+
+    Called from the HTTP middleware on every request. Cheap: a dict
+    comprehension over ~19 headers plus a lock. Returns False when the request
+    did not come through the Catalyst gateway (local development), which is a
+    normal outcome.
+    """
+    try:
+        zc = {k.lower(): v for k, v in dict(headers).items()
+              if k.lower().startswith("x-zc-")}
+    except Exception:
+        return False
+    if _PROJECT_HEADER not in zc:
+        return False
+    with _creds_lock:
+        _creds["headers"] = zc
+        _creds["captured_at"] = time.time()
+        _creds["captures"] += 1
+    return True
+
+
+def _seed_current_thread() -> bool:
+    """
+    Replay the captured headers into the SDK's per-thread store for THIS thread.
+
+    No-op returning True when the thread already carries its own headers, so a
+    request thread always uses its own (freshest) credentials.
+    """
+    try:
+        from zcatalyst_sdk._thread_util import ZCThreadUtil
+        util = ZCThreadUtil()
+        if util.get_value("catalyst_headers"):
+            return True
+        with _creds_lock:
+            headers = _creds["headers"]
+        if not headers:
+            return False
+        util.put_value("catalyst_headers", dict(headers))
+        return True
+    except Exception as exc:
+        _state["last_init_error"] = f"header replay failed: {type(exc).__name__}: {exc}"
+        return False
 
 
 def sdk_available() -> bool:
@@ -84,10 +169,18 @@ def get_app():
     """
     Return an initialised CatalystApp, or None.
 
-    Returning None is a normal outcome, not an error: it is what happens on a
-    developer machine and outside a request on AppSail. Callers must handle it.
+    Works on any thread once a single request has passed through the middleware,
+    because the identity headers are replayed into the calling thread first.
+    Returning None is still a normal outcome: it is what happens on a developer
+    machine, and on AppSail before the very first request. Callers must handle it.
     """
     if not sdk_available():
+        return None
+    if not _seed_current_thread():
+        _state["last_init_error"] = (
+            "no Catalyst request headers captured yet - either no request has "
+            "reached this process or it is not running behind the Catalyst gateway"
+        )
         return None
     try:
         import zcatalyst_sdk
@@ -96,8 +189,8 @@ def get_app():
         _state["last_init_error"] = None
         return app
     except Exception as exc:
-        # Expected off-request. Recorded rather than raised, and logged at debug
-        # so a per-request retry cannot flood the log.
+        # Recorded rather than raised, and logged at debug so a per-request retry
+        # cannot flood the log.
         _state["last_init_error"] = f"{type(exc).__name__}: {exc}"
         log.debug("Catalyst initialize() unavailable: %s", _state["last_init_error"])
         return None
@@ -124,11 +217,25 @@ def stratus_bucket(bucket: Optional[str] = None):
 def stratus_put(key: str, data: bytes, content_type: str = "application/octet-stream") -> bool:
     b = stratus_bucket()
     if b is None:
+        _state["last_stratus_error"] = (
+            f"no bucket handle ({_state['last_init_error'] or 'KSP_STRATUS_BUCKET unset'})"
+        )
         return False
     try:
-        b.put_object(key, data, {"overwrite": True, "content_type": content_type})
+        # 'overwrite' MUST be the string "true", not the boolean True: the SDK
+        # assigns option values directly into the outgoing HTTP headers, and
+        # requests rejects a non-string header value with InvalidHeader.
+        res = b.put_object(key, data, {"overwrite": "true", "content_type": content_type})
+        # put_object returns True on HTTP 200, otherwise the parsed response body.
+        # A non-True return is not necessarily a failure, so it is recorded rather
+        # than guessed at.
+        if res is not True:
+            _state["last_stratus_error"] = f"put returned {str(res)[:200]}"
+        else:
+            _state["last_stratus_error"] = None
         return True
     except Exception as exc:
+        _state["last_stratus_error"] = f"{type(exc).__name__}: {exc}"
         log.warning("Stratus put %r failed: %s", key, exc)
         return False
 
@@ -136,9 +243,13 @@ def stratus_put(key: str, data: bytes, content_type: str = "application/octet-st
 def stratus_get(key: str) -> Optional[bytes]:
     b = stratus_bucket()
     if b is None:
+        _state["last_stratus_error"] = (
+            f"no bucket handle ({_state['last_init_error'] or 'KSP_STRATUS_BUCKET unset'})"
+        )
         return None
     try:
         if not b.head_object(key):
+            _state["last_stratus_error"] = None
             return None
         obj = b.get_object(key)
         # The SDK may hand back bytes, a str, or a file-like object depending on
@@ -151,8 +262,10 @@ def stratus_get(key: str) -> Optional[bytes]:
         if callable(reader):
             return reader()
         log.warning("Stratus get %r returned unexpected type %s", key, type(obj).__name__)
+        _state["last_stratus_error"] = f"get returned unexpected type {type(obj).__name__}"
         return None
     except Exception as exc:
+        _state["last_stratus_error"] = f"{type(exc).__name__}: {exc}"
         log.warning("Stratus get %r failed: %s", key, exc)
         return None
 
@@ -211,11 +324,20 @@ def send_mail(subject: str, content: str, to: List[str],
 # ---------------------------------------------------------------------------
 def diagnostics() -> Dict[str, Any]:
     """Facts about SDK availability. Deliberately does not attempt a call."""
+    with _creds_lock:
+        captured_at = _creds["captured_at"]
+        captures = _creds["captures"]
     return {
         "sdk_importable": sdk_available(),
         "import_error": _state["import_error"],
         "initialised_at_least_once": _state["init_ok_once"],
         "last_init_error": _state["last_init_error"],
+        "last_stratus_error": _state["last_stratus_error"],
+        # Presence and age only - the header values are credentials.
+        "gateway_headers_captured": captures,
+        "gateway_headers_age_seconds": (
+            round(time.time() - captured_at, 1) if captured_at else None
+        ),
         "stratus_bucket_configured": bool(os.getenv("KSP_STRATUS_BUCKET", "").strip()),
         "filestore_folder_configured": bool(os.getenv("KSP_FILESTORE_FOLDER_ID", "").strip()),
         "mail_from_configured": bool(os.getenv("MAIL_FROM", "").strip()),
