@@ -30,27 +30,33 @@ async def clearance_metrics(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Arrest and chargesheet (clearance) rates, overall and per district."""
-    total = db.execute(text("SELECT COUNT(*) FROM CaseMaster")).scalar() or 0
+    # NOTE: the official FIR tables/columns use mixed case, so every identifier
+    # is double-quoted. PostgreSQL folds unquoted identifiers to lowercase
+    # ("CaseMaster" -> casemaster) and the query would fail; SQLite accepts the
+    # quoted form too, so this is portable.
+    total = db.execute(text('SELECT COUNT(*) FROM "CaseMaster"')).scalar() or 0
     with_arrest = db.execute(text(
-        "SELECT COUNT(DISTINCT CaseMasterID) FROM ArrestSurrender")).scalar() or 0
+        'SELECT COUNT(DISTINCT "CaseMasterID") FROM "ArrestSurrender"')).scalar() or 0
     # cstype 'A' = chargesheet filed → the case is considered cleared/charged.
     chargesheeted = db.execute(text(
-        "SELECT COUNT(DISTINCT CaseMasterID) FROM ChargesheetDetails WHERE cstype='A'")).scalar() or 0
+        'SELECT COUNT(DISTINCT "CaseMasterID") FROM "ChargesheetDetails" '
+        "WHERE cstype='A'")).scalar() or 0
 
     # Per-district breakdown (CaseMaster → Unit → District)
     rows = db.execute(text(
         """
-        SELECT d.DistrictName AS district,
-               COUNT(DISTINCT cm.CaseMasterID) AS total,
-               COUNT(DISTINCT ars.CaseMasterID) AS arrested,
-               COUNT(DISTINCT cs.CaseMasterID)  AS chargesheeted
-        FROM CaseMaster cm
-        LEFT JOIN Unit u      ON u.UnitID = cm.PoliceStationID
-        LEFT JOIN District d  ON d.DistrictID = u.DistrictID
-        LEFT JOIN ArrestSurrender ars ON ars.CaseMasterID = cm.CaseMasterID
-        LEFT JOIN ChargesheetDetails cs ON cs.CaseMasterID = cm.CaseMasterID AND cs.cstype='A'
-        WHERE d.DistrictName IS NOT NULL
-        GROUP BY d.DistrictName
+        SELECT d."DistrictName" AS district,
+               COUNT(DISTINCT cm."CaseMasterID") AS total,
+               COUNT(DISTINCT ars."CaseMasterID") AS arrested,
+               COUNT(DISTINCT cs."CaseMasterID")  AS chargesheeted
+        FROM "CaseMaster" cm
+        LEFT JOIN "Unit" u      ON u."UnitID" = cm."PoliceStationID"
+        LEFT JOIN "District" d  ON d."DistrictID" = u."DistrictID"
+        LEFT JOIN "ArrestSurrender" ars ON ars."CaseMasterID" = cm."CaseMasterID"
+        LEFT JOIN "ChargesheetDetails" cs
+               ON cs."CaseMasterID" = cm."CaseMasterID" AND cs.cstype='A'
+        WHERE d."DistrictName" IS NOT NULL
+        GROUP BY d."DistrictName"
         ORDER BY total DESC
         """
     )).fetchall()
@@ -80,14 +86,17 @@ async def officer_caseload(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Caseload per investigating officer (CaseMaster.PolicePersonID → Employee)."""
+    # Identifiers are quoted for PostgreSQL compatibility (see note above), and
+    # every non-aggregated column is in GROUP BY — PostgreSQL requires that,
+    # whereas SQLite tolerates omitting them.
     rows = db.execute(text(
         """
-        SELECT e.FirstName AS officer, r.RankName AS rank,
-               COUNT(cm.CaseMasterID) AS cases
-        FROM CaseMaster cm
-        JOIN Employee e ON e.EmployeeID = cm.PolicePersonID
-        LEFT JOIN Rank r ON r.RankID = e.RankID
-        GROUP BY e.EmployeeID
+        SELECT e."FirstName" AS officer, r."RankName" AS rank,
+               COUNT(cm."CaseMasterID") AS cases
+        FROM "CaseMaster" cm
+        JOIN "Employee" e ON e."EmployeeID" = cm."PolicePersonID"
+        LEFT JOIN "Rank" r ON r."RankID" = e."RankID"
+        GROUP BY e."EmployeeID", e."FirstName", r."RankName"
         ORDER BY cases DESC
         """
     )).fetchall()

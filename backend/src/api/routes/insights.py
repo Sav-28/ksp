@@ -9,16 +9,18 @@ Endpoints:
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import Dict, Any, List
-from collections import Counter
+from sqlalchemy import func, text
+from typing import Dict, Any, List, Optional
+from collections import Counter, defaultdict
 from datetime import date
+import math
 
 from src.database.session import get_db
 from src.database.models import Person, CasePerson, Crime, GangMember, Gang
 from src.api.auth import get_current_user
 from src.ml import risk_model
 from src.ml.features import make_vector, URBAN_DISTRICTS as ML_URBAN
+from src.services import cache
 
 router = APIRouter()
 
@@ -62,89 +64,289 @@ async def sociological_insights(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Demographic & socio-economic breakdown of ACCUSED persons."""
-    # Join accused persons
+    """Demographic profile of accused, normalised against the population baseline."""
+    # Cached for 15 minutes. This walks every person and every accused link, then
+    # runs a two-proportion test per cell, so it is the most expensive read in the
+    # application. It only changes when cases are added.
+    data, source = cache.get_or_compute(
+        "insights:sociological:v1", 900, lambda: _build_sociological(db))
+    data["cache"] = {"source": source, "ttl_seconds": 900}
+    return data
+
+
+def _build_sociological(db: Session) -> Dict[str, Any]:
+    """
+    Demographic profile of accused persons, NORMALISED against the recorded
+    population.
+
+    Why normalisation matters. This endpoint previously reported the raw
+    distribution of accused across demographic bands, and labelled the largest
+    band a "social risk factor". That is the base-rate fallacy: if a band is large
+    in the population it will be large among accused, and saying so carries no
+    information. Worse, it can point the wrong way. On the seeded data the 'Low'
+    socio-economic band held the largest share of accused (28.7%) while being
+    30.9% of the population - so accused were slightly UNDER-represented there,
+    and the old output implied the opposite.
+
+    Every dimension is therefore reported as three numbers: the share among
+    accused, the share in the population, and a REPRESENTATION INDEX of one
+    divided by the other. An index of 1.0 means a band appears among accused
+    exactly as often as its size predicts, and only a material departure from 1.0
+    is a finding.
+
+    Counting unit: one row per accused INVOLVEMENT, not per person, so a repeat
+    offender is counted once per case. The population baseline counts each person
+    once. Both totals are returned so the difference is visible rather than
+    implied.
+    """
+    # Population baseline: every person on record, counted once.
+    all_persons = db.query(Person).all()
+    pmap = {p.id: p for p in all_persons}
+
     accused_links = db.query(CasePerson).filter(CasePerson.role == "accused").all()
-    person_ids = [l.person_id for l in accused_links]
-    persons = db.query(Person).filter(Person.id.in_(set(person_ids))).all() if person_ids else []
-    pmap = {p.id: p for p in persons}
 
-    age_bands = Counter()
-    genders = Counter()
-    ses = Counter()
-    education = Counter()
-    occupations = Counter()
-    urbanization = Counter()
+    DIMENSIONS = ("age_band", "gender", "socio_economic", "education",
+                  "occupation", "urbanization")
 
-    # Count by accused involvement (each accused link counts)
+    def attrs_of(p) -> Dict[str, str]:
+        return {
+            "age_band": _age_band(p.age),
+            "gender": p.gender or "Unknown",
+            "socio_economic": p.socio_economic_status or "Unknown",
+            "education": p.education_level or "Unknown",
+            "occupation": p.occupation or "Unknown",
+            "urbanization": _urbanization(p.district),
+        }
+
+    accused_counts: Dict[str, Counter] = {d: Counter() for d in DIMENSIONS}
+    population_counts: Dict[str, Counter] = {d: Counter() for d in DIMENSIONS}
+
+    for p in all_persons:
+        for dim, val in attrs_of(p).items():
+            population_counts[dim][val] += 1
+
+    distinct_accused = set()
     for link in accused_links:
         p = pmap.get(link.person_id)
         if not p:
             continue
-        age_bands[_age_band(p.age)] += 1
-        genders[p.gender or "Unknown"] += 1
-        ses[p.socio_economic_status or "Unknown"] += 1
-        education[p.education_level or "Unknown"] += 1
-        occupations[p.occupation or "Unknown"] += 1
-        urbanization[_urbanization(p.district)] += 1
+        distinct_accused.add(p.id)
+        for dim, val in attrs_of(p).items():
+            accused_counts[dim][val] += 1
 
-    def to_list(counter, order=None):
-        items = sorted(counter.items(), key=lambda x: x[1], reverse=True)
-        return [{"label": k, "count": v} for k, v in items]
+    accused_total = sum(accused_counts["gender"].values()) or 1
+    population_total = len(all_persons) or 1
 
-    # A simple social-risk insight: SES band with highest accused share
-    total = len(accused_links) or 1
-    top_ses = ses.most_common(1)[0][0] if ses else None
-    top_age = age_bands.most_common(1)[0][0] if age_bands else None
-    top_edu = education.most_common(1)[0][0] if education else None
-    top_occ = occupations.most_common(1)[0][0] if occupations else None
-    urban_share = round(100.0 * urbanization.get("Urban", 0) / total, 1)
+    # Bands thinner than this are too small for the index to mean anything; the
+    # ratio of two small numbers is dominated by noise.
+    MIN_CELL = 25
+    # An index this far from parity is worth looking at - but size alone is not
+    # enough, so it must also clear the significance test below.
+    MATERIAL = 0.15
+    # Family-wise error rate. Roughly 35 cells are tested here, so at a plain 5%
+    # per test about two false findings would be expected by chance. Without this
+    # correction the analysis reported 'High' socio-economic status at 1.23x and
+    # 'Vendor' occupation at 1.50x, both of which are noise on unbiased data.
+    ALPHA = 0.05
 
-    def _pct(counter, key):
-        return round(100.0 * counter.get(key, 0) / total, 1)
+    def build(dim: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        rows = []
+        for label, count in accused_counts[dim].items():
+            pop = population_counts[dim].get(label, 0)
+            accused_share = 100.0 * count / accused_total
+            pop_share = 100.0 * pop / population_total
+            index = (accused_share / pop_share) if pop_share else None
+            reliable = count >= MIN_CELL and pop >= MIN_CELL
+            p_value = _two_proportion_p(count, accused_total, pop, population_total)
+            rows.append({
+                "label": label,
+                "count": count,
+                "accused_share_pct": round(accused_share, 1),
+                "population_count": pop,
+                "population_share_pct": round(pop_share, 1),
+                "representation_index": round(index, 2) if index is not None else None,
+                "p_value": p_value,
+                "reliable": reliable,
+                # Direction is assigned in a second pass, once the number of
+                # tests is known, because the significance bar depends on it.
+                "direction": None,
+            })
+        rows.sort(key=lambda r: r["count"], reverse=True)
+        return rows[:limit] if limit else rows
 
-    # Correlations of crime with social indicators (Area 4). Each is a
-    # data-backed finding, not a claim — the share is shown for transparency.
-    social_risk_factors = []
-    if top_ses:
-        social_risk_factors.append({
-            "factor": "Economic stress",
-            "finding": f"{_pct(ses, top_ses)}% of accused fall in the '{top_ses}' "
-                       f"socio-economic band — the largest share.",
+    dimensions = {d: build(d, limit=8 if d == "occupation" else None) for d in DIMENSIONS}
+
+    # Second pass: decide which departures survive correction for the number of
+    # comparisons made. Bonferroni is the plainest defensible choice, and being
+    # explicit about it matters more here than squeezing out extra power.
+    n_tests = sum(len(rows) for rows in dimensions.values()) or 1
+    adjusted_alpha = ALPHA / n_tests
+    for rows in dimensions.values():
+        for r in rows:
+            idx, p = r["representation_index"], r["p_value"]
+            if not r["reliable"] or idx is None or p is None:
+                r["direction"] = None
+                continue
+            material = abs(idx - 1) >= MATERIAL
+            significant = p <= adjusted_alpha
+            if material and significant:
+                r["direction"] = "over" if idx > 1 else "under"
+            else:
+                r["direction"] = "parity"
+            r["significant"] = bool(significant)
+
+    # --- Findings: only bands that materially depart from parity --------------
+    DIM_LABELS = {
+        "age_band": "Age", "gender": "Gender", "socio_economic": "Socio-economic status",
+        "education": "Education", "occupation": "Occupation", "urbanization": "Urbanisation",
+    }
+    findings: List[Dict[str, Any]] = []
+    for dim, rows in dimensions.items():
+        for r in rows:
+            if r["direction"] in ("over", "under"):
+                findings.append({
+                    "dimension": dim,
+                    "dimension_label": DIM_LABELS[dim],
+                    "label": r["label"],
+                    "representation_index": r["representation_index"],
+                    "direction": r["direction"],
+                    "accused_share_pct": r["accused_share_pct"],
+                    "population_share_pct": r["population_share_pct"],
+                    "statement": (
+                        f"{r['label']} accounts for {r['accused_share_pct']}% of accused "
+                        f"involvements against {r['population_share_pct']}% of the recorded "
+                        f"population — {r['representation_index']}x "
+                        f"{'over' if r['direction'] == 'over' else 'under'}-represented."
+                    ),
+                })
+    # Strongest departures first, in either direction.
+    findings.sort(key=lambda f: abs((f["representation_index"] or 1) - 1), reverse=True)
+
+    # Dimensions where nothing departed materially. Reporting these explicitly is
+    # the point: a null result is a result, and it stops a reader inferring a
+    # pattern from bar lengths that only reflect population size.
+    dims_with_findings = {f["dimension"] for f in findings}
+    no_signal = [DIM_LABELS[d] for d in DIMENSIONS if d not in dims_with_findings]
+
+    # --- Age by offence type -------------------------------------------------
+    # Where the profile differs by offence rather than in aggregate. Uses the
+    # projected official view so it reflects the system of record.
+    age_by_offence: List[Dict[str, Any]] = []
+    rows = db.execute(text(
+        """
+        SELECT c.crime_type AS offence, p.age AS age
+        FROM case_persons cp
+        JOIN crimes c  ON c.id = cp.crime_id
+        JOIN persons p ON p.id = cp.person_id
+        WHERE cp.role = 'accused' AND p.age IS NOT NULL
+        """
+    )).fetchall()
+    per_offence: Dict[str, List[int]] = defaultdict(list)
+    for r in rows:
+        per_offence[r._mapping["offence"]].append(r._mapping["age"])
+    overall_ages = [a for ages in per_offence.values() for a in ages]
+    overall_median = _median(overall_ages)
+    for offence, ages in per_offence.items():
+        if len(ages) < MIN_CELL:
+            continue
+        med = _median(ages)
+        age_by_offence.append({
+            "offence": offence,
+            "accused": len(ages),
+            "median_age": med,
+            "difference_from_overall": round(med - overall_median, 1),
+            "share_under_35_pct": round(100.0 * sum(1 for a in ages if a < 35) / len(ages), 1),
         })
-    if top_edu:
-        social_risk_factors.append({
-            "factor": "Education",
-            "finding": f"'{top_edu}' is the most common education level among accused "
-                       f"({_pct(education, top_edu)}%).",
-        })
-    if top_occ:
-        social_risk_factors.append({
-            "factor": "Occupation",
-            "finding": f"'{top_occ}' is the most frequent occupation among accused "
-                       f"({_pct(occupations, top_occ)}%).",
-        })
-    social_risk_factors.append({
-        "factor": "Urbanization",
-        "finding": f"{urban_share}% of accused are from urban districts, "
-                   f"{round(100 - urban_share, 1)}% from rural / semi-urban areas.",
-    })
+    age_by_offence.sort(key=lambda x: x["median_age"])
 
     return {
-        "by_age_band": to_list(age_bands),
-        "by_gender": to_list(genders),
-        "by_socio_economic": to_list(ses),
-        "by_education": to_list(education),
-        "by_occupation": to_list(occupations)[:8],
-        "by_urbanization": to_list(urbanization),
-        "social_risk_factors": social_risk_factors,
+        # Normalised dimensions, each row carrying accused share, population
+        # share and the index between them.
+        "dimensions": dimensions,
+        "findings": findings,
+        "no_material_difference": no_signal,
+        "age_by_offence": age_by_offence,
+        "overall_median_age": overall_median,
+        "method": {
+            "counting_unit": "one row per accused involvement; a repeat offender "
+                             "is counted once per case",
+            "baseline": "all persons on record, counted once each",
+            "representation_index": "share among accused divided by share in the "
+                                    "population; 1.0 is parity",
+            "material_threshold": f"index at or beyond {1 + MATERIAL:.2f} / "
+                                  f"{1 - MATERIAL:.2f}",
+            "minimum_cell": MIN_CELL,
+            "significance": (
+                f"two-proportion test, two-sided, Bonferroni-corrected across "
+                f"{n_tests} comparisons (p must be at or below "
+                f"{adjusted_alpha:.5f}); a band must clear both the effect-size "
+                f"floor and this bar to be reported as a difference"
+            ),
+            "independence_caveat": (
+                "accused involvements are not fully independent, since one repeat "
+                "offender contributes several rows, so the test is somewhat "
+                "anti-conservative"
+            ),
+            "caution": "Associations are statistical and descriptive. They do not "
+                       "establish cause, and must not be used to infer criminality "
+                       "from group membership.",
+        },
+        "totals": {
+            "accused_involvements": accused_total,
+            "distinct_accused_persons": len(distinct_accused),
+            "population": population_total,
+        },
+        # --- Backward-compatible keys (older clients) -----------------------
+        "by_age_band": [{"label": r["label"], "count": r["count"]} for r in dimensions["age_band"]],
+        "by_gender": [{"label": r["label"], "count": r["count"]} for r in dimensions["gender"]],
+        "by_socio_economic": [{"label": r["label"], "count": r["count"]} for r in dimensions["socio_economic"]],
+        "by_education": [{"label": r["label"], "count": r["count"]} for r in dimensions["education"]],
+        "by_occupation": [{"label": r["label"], "count": r["count"]} for r in dimensions["occupation"]],
+        "by_urbanization": [{"label": r["label"], "count": r["count"]} for r in dimensions["urbanization"]],
         "insights": {
-            "highest_risk_ses": top_ses,
-            "most_common_age_band": top_age,
-            "urban_share_pct": urban_share,
-            "total_accused_records": len(accused_links),
+            "most_common_age_band": (dimensions["age_band"][0]["label"]
+                                     if dimensions["age_band"] else None),
+            "total_accused_records": accused_total,
         },
     }
+
+
+def _median(values: List[float]) -> float:
+    """Median without pulling in numpy, which is optional at runtime."""
+    if not values:
+        return 0.0
+    s = sorted(values)
+    mid = len(s) // 2
+    return float(s[mid]) if len(s) % 2 else round((s[mid - 1] + s[mid]) / 2, 1)
+
+
+def _two_proportion_p(a: int, a_total: int, b: int, b_total: int) -> Optional[float]:
+    """
+    Two-sided p-value for a difference between two proportions, a/a_total vs
+    b/b_total, by the pooled normal approximation.
+
+    Uses math.erf for the normal CDF so nothing outside the standard library is
+    needed - the cloud build has no scipy.
+
+    Honest limitation: accused involvements are not fully independent, because one
+    repeat offender contributes several rows. That makes this test somewhat
+    anti-conservative, so it is paired with a minimum cell size, an effect-size
+    floor, and a correction for the number of comparisons rather than relied on
+    alone.
+    """
+    if a_total <= 0 or b_total <= 0:
+        return None
+    p1 = a / a_total
+    p2 = b / b_total
+    pooled = (a + b) / (a_total + b_total)
+    if pooled <= 0 or pooled >= 1:
+        return None
+    se = math.sqrt(pooled * (1 - pooled) * (1 / a_total + 1 / b_total))
+    if se == 0:
+        return None
+    z = abs(p1 - p2) / se
+    # Two-sided: 2 * (1 - Phi(z)), with Phi from the error function.
+    return round(2.0 * (1.0 - 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))), 6)
 
 
 # ---------------------------------------------------------------------------
@@ -171,14 +373,17 @@ def compute_risk(db: Session, person_id: int) -> Dict[str, Any]:
     ).all()
     n_cases = len(links)
 
+    # One query for every linked crime rather than one per link: compute_risk is
+    # called per offender, so a per-link lookup multiplies round-trips fast.
+    crime_ids = [l.crime_id for l in links if l.crime_id]
     crime_types = []
     latest_year = 0
-    for l in links:
-        crime = db.query(Crime).get(l.crime_id)
-        if crime:
-            crime_types.append(crime.crime_type)
-            if crime.date_occurred:
-                latest_year = max(latest_year, crime.date_occurred.year)
+    if crime_ids:
+        for ctype, occurred in db.query(Crime.crime_type, Crime.date_occurred) \
+                                 .filter(Crime.id.in_(crime_ids)):
+            crime_types.append(ctype)
+            if occurred:
+                latest_year = max(latest_year, occurred.year)
 
     severity_total = sum(SEVERITY.get(ct, 3) for ct in crime_types)
     is_gang = db.query(GangMember).filter(GangMember.person_id == person_id).count() > 0
@@ -313,21 +518,21 @@ async def offender_profile(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Detailed behavioural profile of an offender (Area 5)."""
-    p = db.query(Person).get(person_id)
+    p = db.get(Person, person_id)
     if not p:
         raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
 
     risk = compute_risk(db, person_id)
 
-    # Case history
+    # Case history, bulk-loaded in one query instead of one per link.
     links = db.query(CasePerson).filter(
         CasePerson.person_id == person_id, CasePerson.role == "accused"
     ).all()
+    crime_ids = [l.crime_id for l in links if l.crime_id]
     cases = []
     crime_types = []
-    for l in links:
-        crime = db.query(Crime).get(l.crime_id)
-        if crime:
+    if crime_ids:
+        for crime in db.query(Crime).filter(Crime.id.in_(crime_ids)):
             crime_types.append(crime.crime_type)
             cases.append({
                 "fir_number": crime.fir_number, "crime_type": crime.crime_type,
@@ -335,12 +540,16 @@ async def offender_profile(
             })
     cases.sort(key=lambda c: c["date"], reverse=True)
 
-    # Gang affiliations
-    gangs = []
-    for gm in db.query(GangMember).filter(GangMember.person_id == person_id).all():
-        g = db.query(Gang).get(gm.gang_id)
-        if g:
-            gangs.append({"gang": g.name, "role": gm.role, "activity": g.primary_activity})
+    # Gang affiliations, likewise resolved in a single query.
+    memberships = db.query(GangMember).filter(GangMember.person_id == person_id).all()
+    gang_ids = [gm.gang_id for gm in memberships if gm.gang_id]
+    gang_map = {g.id: g for g in db.query(Gang).filter(Gang.id.in_(gang_ids))} \
+        if gang_ids else {}
+    gangs = [
+        {"gang": gang_map[gm.gang_id].name, "role": gm.role,
+         "activity": gang_map[gm.gang_id].primary_activity}
+        for gm in memberships if gm.gang_id in gang_map
+    ]
 
     # Behavioural summary
     mo = Counter(crime_types)

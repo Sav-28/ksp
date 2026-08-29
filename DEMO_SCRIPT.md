@@ -1,16 +1,17 @@
 # KSP Crime AI — Demo Script
 
 A tight, story-driven walkthrough for judges. One connected narrative beats a
-feature tour. Total: ~90 seconds for the core, ~5 minutes for the full run.
+feature tour. Roughly 2 minutes for the core (the restart in step 7 sets the pace),
+~5 minutes for the full run.
 
 > **Honest framing (say this up front):** "All data is synthetic with planted
-> patterns; the platform runs on the **official Karnataka Police FIR schema** and
-> the ML/analytics pipeline is ready to retrain on real KSP data with no code
-> changes."
+> patterns; the platform runs on the **official Karnataka Police FIR schema**,
+> stores everything in **persistent PostgreSQL**, and the ML/analytics pipeline is
+> ready to retrain on real KSP data with no code changes."
 
 ---
 
-## The 90-second core demo — "Shadow Hawks chain-snatching ring"
+## The core demo — "Shadow Hawks chain-snatching ring"
 
 **Login:** `supervisor / super@2024` (has every tab, including register + close).
 
@@ -31,15 +32,39 @@ feature tour. Total: ~90 seconds for the core, ~5 minutes for the full run.
    links, outer ring = second-degree."*
 
 4. **Offender risk — real ML.** → PROFILES tab. Point at the green badge:
-   **"🤖 Risk scores by trained ML model · ROC-AUC 0.979".** Open a high-risk
-   offender. **Say:** *"This score is a trained RandomForest, not a formula —
-   AUC 0.98 on held-out data — with explainable risk factors below."*
+   **"🤖 Risk scores by trained ML model · ROC-AUC 0.992".** Open a high-risk
+   offender. **Say:** *"This score is a trained model, not a formula —
+   ROC-AUC 0.992 on held-out data — with explainable risk factors below."*
 
-5. **Close the loop — decision support + governance.** In the chat, ask
+5. **A second measured model.** → FORECAST tab. Point at the green badge —
+   **"🤖 Forecast by backtested model"** with the selected method, MAE, and a chip
+   showing the percentage improvement over the naive baseline. **Say:** *"The
+   forecaster isn't hand-picked. Ten candidates are scored by walk-forward
+   backtesting on held-out months, and the lowest-error one wins. We report the
+   error against a naive baseline, so you can see what it's worth."* Point at the
+   shaded band on the chart: *"And the projection carries an 80% interval derived
+   from the error we actually measured, not an assumed variance."*
+
+   > **Read the badge live, don't quote a number from memory.** The winning method
+   > and its error depend on the seeded data, so they can change after a re-seed.
+
+6. **Close the loop — decision support + governance.** In the chat, ask
    *"summarize this case"* and *"find similar cases"*. Then → CASE INVESTIGATION,
    pull the CrimeNo, and as supervisor **close the case**. **Say:** *"Investigators
    advance a case; only supervisors can close it — role-based access, and every
    action is audited."*
+
+7. **Prove it persists.** → Restart the backend (or redeploy), then reopen CASE
+   INVESTIGATION and pull the same CrimeNo. **Say:** *"The record survives a
+   restart, because this runs on managed PostgreSQL rather than a temporary file.
+   Earlier it ran on SQLite in an ephemeral directory, so every restart wiped the
+   data — that's fixed, and `/api/system/info` reports the storage mode so you
+   never have to guess."*
+
+   > **Film this beat.** Persistence was the platform's weakest point, so showing
+   > register → restart → still-there is the single most convincing moment in the
+   > demo. Show `/api/system/info` returning `"backend": "postgresql"`,
+   > `"persistent": true`.
 
 ---
 
@@ -51,10 +76,10 @@ feature tour. Total: ~90 seconds for the core, ~5 minutes for the full run.
 | 2 | NETWORK — open Shadow Hawks | 2 | Co-accused + gang network, grounded in real cases |
 | 3 | DASHBOARD + MAP | 3 | Trends, hotspots, emerging surges |
 | 4 | INSIGHTS | 4 | Demographic + social-risk-factor correlations |
-| 5 | PROFILES | 5 | **Trained ML risk model (AUC 0.98)** + explainable factors |
+| 5 | PROFILES | 5 | **Trained ML risk model (ROC-AUC 0.992)** + explainable factors |
 | 6 | Chat: "summarize / similar cases" | 6 | Case summaries, timelines, leads |
 | 7 | FINANCE | 7 | Suspicious money-trail (demo integration) |
-| 8 | FORECAST | 8 | Next-month projection + **anomaly detection (z-score)** |
+| 8 | FORECAST | 8 | **Backtested forecast** with MAE vs naive baseline + 80% interval, plus anomaly detection (z-score) |
 | 9 | "Why this answer?" on any reply | 9 | Explainable evidence trail |
 | 10 | REGISTER FIR / close case / AUDIT | 10 | RBAC write workflow + audit log |
 
@@ -62,14 +87,31 @@ feature tour. Total: ~90 seconds for the core, ~5 minutes for the full run.
 
 ## Anticipated judge questions (and honest answers)
 
-- **"Is this real machine learning?"** — Yes for offender risk: a RandomForest
-  trained on demographic/severity/gang features, ROC-AUC 0.979 on a held-out
-  split, with feature importances shown. Forecasting and anomaly detection are
-  transparent statistics (moving-average, z-score) — deliberately explainable for
-  a policing context, not a black box.
-- **"Is the data real?"** — No, it's synthetic with planted patterns for the demo.
-  The database is the **official KSP FIR schema** (28 tables, 18-digit CrimeNo),
-  so real data drops in without code changes; the ML retrains on startup.
+- **"Is this real machine learning?"** — Two models, both with a measured metric.
+  Offender risk is trained on demographic/severity/gang features: **ROC-AUC 0.992**
+  on a held-out split, with feature importances shown. Crime-volume forecasting
+  **selects** among ten candidate forecasters by walk-forward one-step-ahead
+  backtesting over 16 held-out months, reports its MAE against a naive baseline,
+  and attaches an 80% prediction interval from the measured RMSE. Read the current
+  figures off the badge — they move with the data. Anomaly detection is z-score —
+  deliberately transparent for a policing context. Both models run as pure Python
+  at inference time, so the cloud build needs no heavy ML stack.
+- **"Why such simple models?"** — With about two years of monthly history a
+  high-capacity model would overfit. A measured error against a baseline is more
+  defensible than an unvalidated complex model, and in policing an explainable
+  score beats a marginally better black box.
+- **"Is the data real?"** — No. It's synthetic with planted patterns, and we label
+  that rather than dress it up. The district and crime-type mixes are
+  **illustrative, not derived from published crime statistics** — they live in
+  `backend/data/reference/karnataka_crime_reference.json` where every block records
+  its own basis and source, so recalibrating against NCRB or KSP figures is a data
+  edit, not a code change. The database is the **official KSP FIR schema**
+  (18-digit CrimeNo), so real data drops in without code changes.
+- **"Does the data survive a restart?"** — Yes. Managed PostgreSQL, shared across
+  instances, verified by registering an FIR and redeploying. `/api/system/info`
+  reports the active backend and whether storage is persistent. Auto-seeding is off
+  in production and in any case only runs on an empty database, so real data can
+  never be overwritten by the demo seeder.
 - **"What about privacy / data sovereignty?"** — Parameterized SQL (injection-safe),
   hashed passwords, role-based access, full audit log, and the optional LLM runs
   on-premise — sensitive data never leaves government infrastructure.
@@ -80,12 +122,22 @@ feature tour. Total: ~90 seconds for the core, ~5 minutes for the full run.
 ---
 
 ## Reset before demoing
+
+Local (SQLite) reset:
 ```bash
 cd backend
-python generate_narrative_data.py   # fresh calibrated dataset
-python migrate_to_fir_schema.py      # project into official schema
+python generate_narrative_data.py    # fresh demo dataset (deterministic: seed 2025)
+python migrate_to_fir_schema.py      # project into the official FIR schema
 python train_risk_model.py           # retrain the risk model
 python main.py                       # start API (also auto-does the above if empty)
 ```
+
+> Run the projection **after** re-seeding. Re-seeding clears the official case
+> tables, so skipping it leaves the analytics layer and the system of record
+> disagreeing.
+
+**Do not run this against the production database.** It clears and rewrites
+everything. Production has `KSP_AUTOSEED=false` for exactly this reason. To prepare
+a fresh production database instead, use `python setup_postgres.py` once.
 Demo logins: `supervisor/super@2024`, `investigator/invest@2024`,
 `analyst/analyst@2024`, `policymaker/policy@2024`.

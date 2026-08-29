@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from src.database.models import Crime, FIRDetails, CasePerson, Person
 from src.database import models_fir as F
+from src.services.compliance import assess_custody
 
 
 def _official_police_details(db: Session, crime_no: str) -> Optional[Dict[str, Any]]:
@@ -26,9 +27,32 @@ def _official_police_details(db: Session, crime_no: str) -> Optional[Dict[str, A
     st = db.get(F.CaseStatusMaster, cm.CaseStatusID) if cm.CaseStatusID else None
     occ = db.query(F.Inv_OccuranceTime).filter(
         F.Inv_OccuranceTime.CaseMasterID == cm.CaseMasterID).first()
+
+    # Arrest and chargesheet facts, so the dossier can show this case's position
+    # against the statutory chargesheet period. An investigator opening a case
+    # needs to know whether the custody clock is running before anything else.
+    arrest = db.query(F.ArrestSurrender) \
+               .filter(F.ArrestSurrender.CaseMasterID == cm.CaseMasterID) \
+               .order_by(F.ArrestSurrender.ArrestSurrenderDate.asc()).first()
+    chargesheet = db.query(F.ChargesheetDetails) \
+                    .filter(F.ChargesheetDetails.CaseMasterID == cm.CaseMasterID).first()
+
+    arrest_date = arrest.ArrestSurrenderDate if arrest else None
+    if hasattr(arrest_date, "date"):
+        arrest_date = arrest_date.date()
+    gravity = grav.LookupValue if grav else None
+    # The 60/90-day rule is applied by the compliance service, so a dossier and
+    # the compliance report can never disagree about whether a case has breached.
+    custody = assess_custody(arrest_date, gravity, chargesheet is not None)
+
     return {
         "crime_no": cm.CrimeNo,
         "case_no": cm.CaseNo,
+        "arrest_date": arrest_date.isoformat() if arrest_date else None,
+        "chargesheet_filed": chargesheet is not None,
+        "chargesheet_date": (str(chargesheet.csdate)[:10]
+                             if chargesheet is not None and chargesheet.csdate else None),
+        "custody_clock": custody,
         "registered_date": str(cm.CrimeRegisteredDate) if cm.CrimeRegisteredDate else None,
         "category": cat.LookupValue if cat else None,
         "gravity": grav.LookupValue if grav else None,
@@ -66,9 +90,17 @@ def get_crime_detail(db: Session, fir_number: str) -> Optional[Dict[str, Any]]:
     fir = db.query(FIRDetails).filter(FIRDetails.crime_id == crime.id).first()
     links = db.query(CasePerson).filter(CasePerson.crime_id == crime.id).all()
 
+    # Fetch every linked person in ONE query rather than one per link. This is
+    # the hot path for CASE INVESTIGATION and the chat's "summarize this case",
+    # and a per-link lookup costs a network round-trip each against managed
+    # PostgreSQL.
+    person_ids = [l.person_id for l in links if l.person_id]
+    people = {p.id: p for p in db.query(Person).filter(Person.id.in_(person_ids))} \
+        if person_ids else {}
+
     people_by_role: Dict[str, List[Dict[str, Any]]] = {}
     for link in links:
-        person = db.query(Person).get(link.person_id)
+        person = people.get(link.person_id)
         if person:
             people_by_role.setdefault(link.role, []).append(_person_brief(person))
 

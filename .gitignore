@@ -71,6 +71,12 @@ alembic/versions/
 .pytest_cache/
 htmlcov/
 
+# Catalyst AppSail deploy config — env_variables holds the database password and
+# the token signing key, and this repo is public. Use app-config.example.json as
+# the template; keep the real values local and in the Catalyst console.
+app-config.json
+.new_secret_key.txt
+
 # Catalyst AppSail vendored dependencies (Linux wheels, regenerated per deploy)
 backend/vendor/
 # React build served by the backend on AppSail (regenerated per deploy)

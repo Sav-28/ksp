@@ -13,7 +13,9 @@ from datetime import date, timedelta
 
 from src.database.session import get_db
 from src.database.models import Crime
+from src.database.dialect import month_number
 from src.api.auth import get_current_user
+from src.services import cache
 
 router = APIRouter()
 
@@ -23,6 +25,18 @@ async def get_hotspots(
     db: Session = Depends(get_db),
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
+    """Geographic crime distribution for the hotspot map + emerging surges."""
+    # Cached for 10 minutes. The payload is around 115 KB because it carries every
+    # plotted incident, so it is the heaviest response in the application - but it
+    # is also the one most likely to exceed the Catalyst Cache value ceiling, in
+    # which case get_or_compute reports "computed-oversize" rather than failing.
+    data, source = cache.get_or_compute(
+        "hotspots:v1", 600, lambda: _build_hotspots(db))
+    data["cache"] = {"source": source, "ttl_seconds": 600}
+    return data
+
+
+def _build_hotspots(db: Session) -> Dict[str, Any]:
     """Geographic crime distribution for the hotspot map + emerging surges.
 
     Reads go through v_crimes — the compatibility view over the official FIR
@@ -127,8 +141,8 @@ async def seasonal_trends(
 ) -> Dict[str, Any]:
     """Seasonal (month-of-year) crime pattern + festival-window event analysis."""
     rows = db.execute(text(
-        """
-        SELECT CAST(strftime('%m', date_occurred) AS INTEGER) AS mon, COUNT(*) AS c
+        f"""
+        SELECT {month_number('date_occurred')} AS mon, COUNT(*) AS c
         FROM v_crimes WHERE date_occurred IS NOT NULL
         GROUP BY mon
         """

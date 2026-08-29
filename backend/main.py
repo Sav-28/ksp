@@ -36,6 +36,8 @@ from src.api.routes.briefing import router as briefing_router
 from src.api.routes.casework import router as casework_router
 from src.api.routes.crimes import router as crimes_router
 from src.api.routes.anomaly import router as anomaly_router
+from src.api.routes.system import router as system_router
+from src.api.routes.compliance import router as compliance_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -64,6 +66,27 @@ app.add_middleware(
 def on_startup():
     """Ensure tables exist, auto-seed a fresh DB, and warm up the LLM."""
     import logging
+
+    # Persistence FIRST, before create_tables() and before any seeding decision.
+    # configure() copies the database that shipped with the deployment into the
+    # writable path when that path is empty, so a cold start is already fully
+    # populated. Getting this order wrong would have create_tables() build an
+    # empty schema and the autoseed guard then seed a fresh dataset, discarding
+    # the bundled one. Needs no Catalyst SDK, so it cannot fail the boot.
+    try:
+        from src.services import catalyst_store
+        st = catalyst_store.configure()
+        if st["applicable"]:
+            logging.info(
+                "Persistence: %s | db=%s (%s MB) | seeded_from_bundle=%s",
+                st["mechanism"], st["database_path"], st["database_size_mb"],
+                st["seeded_from_bundle"],
+            )
+        else:
+            logging.info("Persistence: %s", st["reason"])
+    except Exception as e:
+        logging.warning(f"Persistence configure skipped: {e}")
+
     create_tables()
 
     # Ensure the NLP model is usable. If scikit-learn is installed but the shipped
@@ -86,10 +109,11 @@ def on_startup():
         logging.warning(f"NLP init warning: {e}")
 
     # Auto-seed on a fresh/empty database (e.g. ephemeral cloud hosts that
-    # don't persist SQLite). Deterministic dataset; runs only when empty.
+    # don't persist SQLite). Deterministic dataset; runs ONLY when empty, so it
+    # can never overwrite real data on a persistent database.
     if os.getenv("KSP_AUTOSEED", "true").lower() != "false":
         try:
-            from src.database.session import SessionLocal
+            from src.database.session import SessionLocal, engine as _eng
             from src.database.models import Crime
             db = SessionLocal()
             empty = db.query(Crime).count() == 0
@@ -98,6 +122,8 @@ def on_startup():
                 logging.info("Empty database detected — seeding narrative dataset...")
                 import generate_narrative_data
                 generate_narrative_data.main()
+            elif not _eng.dialect.name.startswith("sqlite"):
+                logging.info("Persistent database already populated — skipping seed.")
         except Exception as e:
             logging.warning(f"Auto-seed skipped/failed: {e}")
 
@@ -144,6 +170,54 @@ def on_startup():
 
         threading.Thread(target=_warm, daemon=True).start()
 
+    # Start the debounced uploader last, once the database is settled.
+    try:
+        from src.services import catalyst_store
+        catalyst_store.start_flusher()
+    except Exception as e:
+        logging.warning(f"Database flusher not started: {e}")
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    """Force a final upload so the last write is not lost on a clean stop."""
+    import logging
+    try:
+        from src.services import catalyst_store
+        st = catalyst_store.flush(force=True)
+        logging.info("Shutdown flush: uploads=%s ok=%s",
+                     st["uploads_completed"], st["last_upload_ok"])
+    except Exception as e:
+        logging.warning(f"Shutdown flush failed: {e}")
+
+
+@app.middleware("http")
+async def catalyst_persistence(request, call_next):
+    """
+    Restore on the first request, and mark the database dirty after a write.
+
+    The restore lives here rather than in on_startup for a hard reason: the
+    Catalyst SDK needs Catalyst request headers to initialise, and on AppSail
+    those only exist inside a request. The first request is therefore the
+    earliest point a restore is possible. It is guarded to run at most once and
+    fails closed, leaving the bundled database in place.
+
+    Marking dirty here rather than uploading here is deliberate — a write must
+    not wait on a multi-megabyte upload, so the background flusher does it.
+    """
+    from starlette.concurrency import run_in_threadpool
+    from src.services import catalyst_store
+
+    if not catalyst_store.restored_attempted():
+        # Off the event loop: this does network I/O and a file swap.
+        await run_in_threadpool(catalyst_store.restore_once)
+
+    response = await call_next(request)
+
+    if request.method not in ("GET", "HEAD", "OPTIONS") and response.status_code < 400:
+        catalyst_store.mark_dirty()
+    return response
+
 
 # Include routers
 app.include_router(auth_router, prefix="/api")
@@ -159,6 +233,8 @@ app.include_router(briefing_router, prefix="/api")
 app.include_router(casework_router, prefix="/api")
 app.include_router(crimes_router, prefix="/api")
 app.include_router(anomaly_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
+app.include_router(compliance_router, prefix="/api")
 
 
 @app.get("/health")
