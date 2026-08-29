@@ -38,6 +38,7 @@ from src.api.routes.crimes import router as crimes_router
 from src.api.routes.anomaly import router as anomaly_router
 from src.api.routes.system import router as system_router
 from src.api.routes.compliance import router as compliance_router
+from src.api.routes.push import router as push_router
 
 app = FastAPI(title="KSP Crime AI API", description="Conversational interface for crime database")
 
@@ -157,16 +158,22 @@ def on_startup():
         except Exception as e:
             logging.warning(f"Risk-model training skipped: {e}")
 
-    # Pre-load the Ollama model in the background so the first query is fast.
-    if os.getenv("KSP_NLP_PROVIDER", "ollama").lower() == "ollama":
+    # Pre-load the LLM model in the background so the first query is fast.
+    _nlp_provider = os.getenv("KSP_NLP_PROVIDER", "ollama").lower()
+    if _nlp_provider in ("ollama", "quickml"):
         import threading
-        from src.ai import ollama_client
         from src.ai import language_provider
 
         def _warm():
-            if ollama_client.is_available():
-                ollama_client.warmup()          # load model into memory
-                language_provider.warmup()      # prime the system-prompt cache
+            if _nlp_provider == "ollama":
+                from src.ai import ollama_client
+                if ollama_client.is_available():
+                    ollama_client.warmup()      # load model into memory
+                    language_provider.warmup()  # prime the system-prompt cache
+            else:
+                from src.ai import quickml_client
+                if quickml_client.is_available():
+                    language_provider.warmup()  # prime the system-prompt cache
 
         threading.Thread(target=_warm, daemon=True).start()
 
@@ -243,6 +250,7 @@ app.include_router(crimes_router, prefix="/api")
 app.include_router(anomaly_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(compliance_router, prefix="/api")
+app.include_router(push_router, prefix="/api")
 
 
 @app.get("/health")

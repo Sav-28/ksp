@@ -30,6 +30,7 @@ from src.api.auth import (
     CAN_REGISTER_ROLES, CAN_UPDATE_ROLES, CAN_CLOSE_ROLES,
 )
 from src.services.crime_detail import get_crime_detail
+from src.services import signals as _signals
 from src.data.karnataka import DISTRICTS, DISTRICT_COORDS, POLICE_STATIONS
 
 router = APIRouter()
@@ -566,6 +567,18 @@ async def register_crime(
         raise HTTPException(status_code=500, detail=f"Registration failed: {e}")
 
     logging.info(f"FIR {fir_number} registered by '{username}'")
+
+    # Fire a Catalyst signal after the commit so a failed commit never emits one.
+    # Best-effort, non-blocking — never fails the response.
+    _signals.fir_registered(
+        fir_number=fir_number,
+        crime_type=crime_type,
+        district=district,
+        crime_id=crime.id,
+        registered_by=username,
+        persons_count=len(linked),
+    )
+
     detail = get_crime_detail(db, fir_number)
     return {
         "fir_number": fir_number,
@@ -653,6 +666,15 @@ async def update_investigation(
     ))
     db.commit()
 
+    # Fire a Catalyst signal after the commit. Best-effort, non-blocking.
+    _signals.fir_status_updated(
+        fir_number=fir_number,
+        crime_type=crime.crime_type or "",
+        district=crime.district or "",
+        new_status=fir.investigation_status or "",
+        arrest_made=bool(fir.arrest_made),
+        updated_by=username,
+    )
     return {"fir_number": fir_number, "detail": get_crime_detail(db, fir_number)}
 
 
