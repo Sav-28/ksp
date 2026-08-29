@@ -97,6 +97,39 @@ def build_and_maybe_send(db: Session, send: bool = False) -> Dict[str, Any]:
     else:
         delivery = catalyst.send_mail(subject=subject, content=html, to=recipients)
 
+    # Fire Catalyst signals for each Breached/Critical case, and send push
+    # notifications to subscribed users. Both are best-effort: a failure here
+    # must never fail the digest response.
+    action_cases = [
+        c for c in clock.get("cases", [])
+        if c.get("compliance_status") in ("Breached", "Critical")
+    ]
+    if action_cases:
+        try:
+            from src.services import signals as _signals
+            for c in action_cases:
+                _signals.custody_deadline_alert(
+                    fir_number=c.get("crime_no", ""),
+                    crime_type=c.get("crime_type") or "",
+                    district=c.get("district") or "",
+                    police_station=c.get("police_station") or "",
+                    compliance_status=c.get("compliance_status", ""),
+                    days_remaining=c.get("days_remaining", 0),
+                )
+        except Exception as _exc:
+            import logging as _log
+            _log.getLogger(__name__).warning("Custody signal dispatch failed: %s", _exc)
+
+        try:
+            from src.services import push_service as _push
+            notif_result = _push.broadcast_custody_alerts(cases=action_cases)
+        except Exception as _exc:
+            import logging as _log
+            _log.getLogger(__name__).warning("Push notification dispatch failed: %s", _exc)
+            notif_result = {"sent": False, "reason": str(_exc)}
+    else:
+        notif_result = {"sent": False, "reason": "no action-required cases"}
+
     return {
         "as_on": as_on,
         "subject": subject,
@@ -111,6 +144,7 @@ def build_and_maybe_send(db: Session, send: bool = False) -> Dict[str, Any]:
         "cases": rows,
         "html": html,
         "delivery": delivery,
+        "push": notif_result,
         # Stated plainly so a preview is never mistaken for a sent message.
         "note": (
             "Delivered via Catalyst Mail."

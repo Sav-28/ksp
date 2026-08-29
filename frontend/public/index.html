@@ -4,6 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KSP Crime AI</title>
+    <!--
+      Catalyst Web SDK — required for Cloud Scale Push Notifications.
+      Exposes window.catalyst with catalyst.notification.enableNotification()
+      and catalyst.notification.messageHandler used by PushPermission.tsx.
+      The SDK also handles service worker registration and VAPID internally.
+      Source: Catalyst console → Cloud Scale → Push Notifications → Web tab.
+    -->
+    <script src="/__catalyst/sdk/web/v4/catalyst-web-sdk.js"></script>
 </head>
 <body>
     <div id="root"></div>

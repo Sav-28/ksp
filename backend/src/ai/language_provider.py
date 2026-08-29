@@ -15,8 +15,12 @@ from typing import Dict, Any
 
 from src.nlp.intent_classifier import nlp_service
 from src.ai import ollama_client
+from src.ai import quickml_client
 
-# Which provider to use: "ollama" (default, with rule fallback) or "rules".
+# Which provider to use:
+#   "ollama"   — local Ollama instance (default)
+#   "quickml"  — Catalyst QuickML LLM serving (recommended for AppSail)
+#   "rules"    — keyword/rule-based classifier only (no LLM)
 NLP_PROVIDER = os.getenv("KSP_NLP_PROVIDER", "ollama").lower()
 
 VALID_INTENTS = {"SHOW_CRIMES", "COUNT_CRIMES", "BREAKDOWN_CRIMES", "PERSON_QUERY", "UNKNOWN"}
@@ -120,10 +124,14 @@ def _sanitize(result: Dict[str, Any]) -> Dict[str, Any]:
     return {"intent": intent, "entities": entities}
 
 
-def _understand_with_ollama(text: str) -> Dict[str, Any]:
+def _build_prompt(text: str) -> str:
+    """Compose the user-turn prompt (shared by Ollama and QuickML paths)."""
     today = datetime.date.today().isoformat()
-    user_prompt = f"{FEW_SHOT}\nToday's date is {today}.\nQ: \"{text}\"\nReturn the JSON."
-    raw = ollama_client.chat_json(SYSTEM_PROMPT, user_prompt)
+    return f"{FEW_SHOT}\nToday's date is {today}.\nQ: \"{text}\"\nReturn the JSON."
+
+
+def _understand_with_ollama(text: str) -> Dict[str, Any]:
+    raw = ollama_client.chat_json(SYSTEM_PROMPT, _build_prompt(text))
     clean = _sanitize(raw)
     return {
         "intent": clean["intent"],
@@ -134,16 +142,40 @@ def _understand_with_ollama(text: str) -> Dict[str, Any]:
     }
 
 
+def _understand_with_quickml(text: str) -> Dict[str, Any]:
+    raw = quickml_client.chat_json(SYSTEM_PROMPT, _build_prompt(text))
+    clean = _sanitize(raw)
+    return {
+        "intent": clean["intent"],
+        "confidence": 0.9,
+        "entities": clean["entities"],
+        "normalized_query": None,
+        "engine": f"quickml:{quickml_client.QUICKML_MODEL}",
+    }
+
+
 def get_intent_and_entities(text: str, language: str = "en") -> Dict[str, Any]:
     """
-    Primary entry point. Uses the LLM when configured/available, otherwise the
-    rule-based classifier. Always returns the standard NLP-output dict.
+    Primary entry point. Uses the configured LLM provider when available,
+    otherwise the rule-based classifier. Always returns the standard NLP-output
+    dict.
+
+    Provider selection (KSP_NLP_PROVIDER):
+        ollama   — local Ollama instance (default for dev)
+        quickml  — Catalyst QuickML LLM serving (recommended for AppSail)
+        rules    — keyword/rule-based only (no LLM dependency)
     """
     if NLP_PROVIDER == "ollama":
         try:
             return _understand_with_ollama(text)
         except Exception as e:
             logging.warning(f"Ollama understanding failed; falling back to rules: {e}")
+
+    elif NLP_PROVIDER == "quickml":
+        try:
+            return _understand_with_quickml(text)
+        except Exception as e:
+            logging.warning(f"QuickML understanding failed; falling back to rules: {e}")
 
     result = nlp_service.get_intent_and_entities(text, language)
     result["engine"] = "rules"
@@ -156,8 +188,15 @@ def warmup() -> None:
     first genuine user query is fast (not paying the prompt-eval cost live).
     Best-effort; ignores failures.
     """
-    try:
-        _understand_with_ollama("show crimes in mysuru")
-        logging.info("Language provider (Ollama) warmed up with full prompt.")
-    except Exception as e:
-        logging.warning(f"Provider warmup failed: {e}")
+    if NLP_PROVIDER == "ollama":
+        try:
+            _understand_with_ollama("show crimes in mysuru")
+            logging.info("Language provider (Ollama) warmed up.")
+        except Exception as e:
+            logging.warning(f"Ollama warmup failed: {e}")
+    elif NLP_PROVIDER == "quickml":
+        try:
+            _understand_with_quickml("show crimes in mysuru")
+            logging.info("Language provider (QuickML) warmed up.")
+        except Exception as e:
+            logging.warning(f"QuickML warmup failed: {e}")

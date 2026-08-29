@@ -26,7 +26,18 @@
 
 		"KSP_NLP_PROVIDER": "rules",
 		"KSP_AUTOSEED": "false",
-		"KSP_SECRET_KEY": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\""
+		"KSP_SECRET_KEY": "GENERATE_WITH: python -c \"import secrets; print(secrets.token_hex(32))\"",
+
+		"_comment_quickml": "Catalyst QuickML LLM Serving. Set KSP_NLP_PROVIDER=quickml to use. Create an endpoint in the console: QuickML → Generative AI → LLM Serving → Create Endpoint. Copy the Endpoint URL and CATALYST-ORG id from the endpoint details page.",
+		"KSP_QUICKML_ENDPOINT_URL": "",
+		"KSP_QUICKML_ORG_ID": "",
+		"KSP_QUICKML_MODEL": "quickml-llm",
+
+		"_comment_signals": "Catalyst Function URL for write-event signals (FIR registered, status updated, custody alert). Deploy a Basic I/O function, copy its URL here. Leave empty to disable.",
+		"KSP_FUNCTION_URL": "",
+
+		"_comment_push": "Catalyst Cloud Scale Push Notifications. Recipients are email addresses of Catalyst users in your project. Enable push in the console first: Cloud Scale → Push Notifications → Web tab → copy the enableNotification() snippet into the frontend. No VAPID keys needed — Catalyst manages those.",
+		"KSP_PUSH_RECIPIENTS": ""
 	},
 	"memory": 512,
 	"scripts": {}
