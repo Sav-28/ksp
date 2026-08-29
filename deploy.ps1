@@ -25,17 +25,33 @@ $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $dbUrl  = [string]$cfg.env_variables.DATABASE_URL
 $secret = [string]$cfg.env_variables.KSP_SECRET_KEY
 $seed   = [string]$cfg.env_variables.KSP_AUTOSEED
+$bucket = [string]$cfg.env_variables.KSP_STRATUS_BUCKET
 $LEAKED_KEY = "ksp-demo-3f9a7c21b64e48d0a1e2c5f7d9b0a4e6"
 $fatal = @()
 
+# SQLite is now the supported production backend on AppSail, persisted by
+# snapshotting the database file to the Catalyst Stratus object store. So the
+# check is no longer "is this SQLite" but "if this is ephemeral SQLite, is the
+# snapshot mechanism actually configured". Bare ephemeral SQLite is still fatal:
+# it silently loses every write on restart, which was the original bug.
+$isSqlite = $dbUrl -like "sqlite*"
+$isEphemeral = $isSqlite -and ($dbUrl -match "/tmp/|\\temp\\")
+
 if ($dbUrl -match "PASTE_|REPLACE_|USER:PASSWORD" -or [string]::IsNullOrWhiteSpace($dbUrl)) {
-    $fatal += "DATABASE_URL is still a placeholder. Paste the real PostgreSQL connection string."
+    $fatal += "DATABASE_URL is still a placeholder. Set it to the SQLite path (sqlite:////tmp/ksp_crime_ai.db) or a PostgreSQL connection string."
 }
-elseif ($dbUrl -like "sqlite*") {
-    $fatal += "DATABASE_URL points at SQLite. On AppSail this is an ephemeral path, so all data is lost on restart. Use the PostgreSQL connection string."
+elseif ($isEphemeral -and [string]::IsNullOrWhiteSpace($bucket)) {
+    $fatal += "DATABASE_URL is SQLite on an ephemeral path but KSP_STRATUS_BUCKET is not set, so nothing would persist writes across a restart. Set the Stratus bucket name, or point DATABASE_URL at PostgreSQL."
 }
-elseif ($dbUrl -notmatch "sslmode=") {
+elseif ($isSqlite -and -not $isEphemeral) {
+    Write-Host "NOTE: DATABASE_URL is SQLite on a non-tmp path. On AppSail the app directory is read-only, so prefer sqlite:////tmp/... with KSP_STRATUS_BUCKET set." -ForegroundColor Yellow
+}
+elseif (-not $isSqlite -and $dbUrl -notmatch "sslmode=") {
     Write-Host "WARNING: DATABASE_URL has no sslmode - most managed providers need ?sslmode=require." -ForegroundColor Yellow
+}
+
+if ($isEphemeral -and $bucket) {
+    Write-Host "      persistence: SQLite snapshotted to Stratus bucket '$bucket'." -ForegroundColor DarkGray
 }
 
 if ($secret -eq $LEAKED_KEY) {
@@ -54,7 +70,8 @@ if ($fatal.Count -gt 0) {
     $fatal | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host "[0/5] Config check passed (PostgreSQL, fresh secret, autoseed off)." -ForegroundColor Green
+$dbKind = if ($isEphemeral) { "SQLite + Stratus snapshot" } elseif ($isSqlite) { "SQLite file" } else { "PostgreSQL" }
+Write-Host "[0/5] Config check passed ($dbKind, fresh secret, autoseed off)." -ForegroundColor Green
 
 Write-Host "[1/5] Building the React frontend (same-origin)..." -ForegroundColor Cyan
 Push-Location (Join-Path $root "frontend")
@@ -104,9 +121,11 @@ if ($needsVendor) {
 Write-Host "[4/5] Verifying every dependency is vendored..." -ForegroundColor Cyan
 # Import name differs from the distribution name for some packages.
 $importNames = @{
-    "psycopg2-binary"  = "psycopg2"
-    "python-multipart" = "multipart"
-    "scikit-learn"     = "sklearn"
+    "psycopg2-binary"   = "psycopg2"
+    "python-multipart"  = "multipart"
+    "scikit-learn"      = "sklearn"
+    "zcatalyst-sdk"     = "zcatalyst_sdk"
+    "typing-extensions" = "typing_extensions"
 }
 $missing = @()
 foreach ($line in Get-Content $reqFile) {

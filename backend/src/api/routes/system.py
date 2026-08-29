@@ -34,26 +34,53 @@ async def system_info(
     username: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Report the active database backend, persistence mode, and data counts."""
+    from src.services import catalyst_store
+
     backend = engine.dialect.name
     is_sqlite = backend.startswith("sqlite")
-    # SQLite in a temp/ephemeral directory does not survive a restart.
     ephemeral_path = is_sqlite and ("/tmp" in DATABASE_URL or "\\temp" in DATABASE_URL.lower())
-    persistent = (not is_sqlite) or (is_sqlite and not ephemeral_path)
+    store = catalyst_store.status()
+
+    # SQLite on an ephemeral path is persistent ONLY when the Stratus snapshot
+    # mechanism has actually completed an upload. Claiming persistence because
+    # the mechanism is merely configured would be the same class of overstatement
+    # this endpoint exists to prevent.
+    snapshot_working = bool(store.get("writes_survive_restart"))
+    if not is_sqlite:
+        persistent, note = True, (
+            "PostgreSQL — data persists across restarts and is shared by all instances."
+        )
+    elif not ephemeral_path:
+        persistent, note = True, (
+            "SQLite file storage on a durable path — persists locally, but is not "
+            "shared across instances."
+        )
+    elif snapshot_working:
+        persistent, note = True, (
+            "SQLite on an ephemeral path, persisted by snapshotting the database file "
+            "to the Catalyst Stratus object store after each write and restoring it on "
+            "the first request after a restart. Single-instance: the whole file is the "
+            "unit of transfer, so with more than one instance the last writer wins."
+        )
+    else:
+        persistent, note = False, (
+            "SQLite on an ephemeral path and no Stratus snapshot has completed yet, so "
+            "writes would NOT survive a restart. The dataset itself is present because "
+            "the seeded database ships with the deployment. "
+            f"Snapshot state: restore={store.get('restore_result')}, "
+            f"uploads={store.get('uploads_completed')}, "
+            f"last_error={store.get('last_upload_error')}."
+        )
 
     return {
         "database": {
             "backend": backend,
             "url": _redact(DATABASE_URL),
             "persistent": persistent,
-            "note": (
-                "PostgreSQL — data persists across restarts and is shared by all instances."
-                if not is_sqlite else
-                "SQLite on an ephemeral path — data is reset on restart. Set DATABASE_URL "
-                "to PostgreSQL for production persistence."
-                if ephemeral_path else
-                "SQLite file storage — persists locally, but is not shared across instances."
-            ),
+            "note": note,
         },
+        # Full snapshot state, so persistence can be audited rather than trusted.
+        "persistence": store,
         "seeding": {
             "autoseed_enabled": os.getenv("KSP_AUTOSEED", "true").lower() != "false",
             "note": "Set KSP_AUTOSEED=false on a persistent database so real data is never re-seeded.",

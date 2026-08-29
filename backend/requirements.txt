@@ -1,13 +1,26 @@
 # Runtime dependencies for the deployed backend (Zoho Catalyst AppSail).
 # Kept lightweight and binary-wheel friendly so it vendors/installs reliably
 # on the cloud runtime. The heavy ML stack (scikit-learn/numpy) is OPTIONAL and
-# lives in requirements-ml.txt — the app auto-falls back to a keyword-based
+# lives in requirements-ml.txt - the app auto-falls back to a keyword-based
 # intent classifier when it isn't installed.
 fastapi==0.104.1
 uvicorn==0.24.0
 sqlalchemy==2.0.50
 python-multipart==0.0.6
-requests==2.32.3
-# PostgreSQL driver — required only when DATABASE_URL points at PostgreSQL
-# (production persistence). Harmless with the default SQLite setup.
+
+# Zoho Catalyst SDK - Stratus (SQLite snapshot persistence), Cache, File Store
+# and Mail. Pure-Python (py3-none-any) so it vendors without a platform wheel.
+#
+# Its own pins constrain the two below, which is why they are explicit here
+# rather than left to transitive resolution:
+#   requests~=2.34.2  and  typing-extensions~=4.12.1
+# Leaving them implicit produced a vendor set with typing-extensions 4.16.0,
+# which the SDK rejects. pydantic 2.13.4 needs >=4.12.2, so 4.12.2 satisfies both.
+zcatalyst-sdk==1.4.0
+requests==2.34.2
+typing-extensions==4.12.2
+
+# PostgreSQL driver - retained deliberately. SQLite snapshotted to Stratus is the
+# submission's persistence path, but the data layer is database-portable and
+# PostgreSQL-verified, and that remains the production scale-out route.
 psycopg2-binary==2.9.10
