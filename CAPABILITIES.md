@@ -203,7 +203,20 @@ reason. Services deliberately not used are listed with the reasoning.
   PostgreSQL path remains supported and is the production scale-out route.
 - **Cache** backs the three most expensive reads, with each response naming which
   tier answered.
+- **Zia Text Analytics** reads the complainant statement typed during FIR
+  registration — the one genuinely free-text input in the system, and until now the
+  only thing an officer wrote that nothing read. Named-entity recognition returns
+  the people, places, amounts, dates and times; keyphrases yield the vehicle and
+  the stolen property. The offence type, IPC section and district stay with this
+  project's own authoritative lists, because Zia does not classify offences.
+  Everything is a **suggestion an officer confirms** — never auto-applied, because
+  the legal classification of an offence is an officer's act.
+- **Job Scheduling** runs the custody digest daily against this AppSail deployment
+  itself. No Catalyst Function, no second deployable.
 - **Mail** delivers the custody digest.
+- **SmartBrowz** was built to render the compliance report to PDF server-side. It
+  is refused by this account (see below), so the endpoint serves a print-laid-out
+  A4 document instead and says which happened.
 
 `GET /api/system/info` reports the active backend and whether writes actually
 survive a restart — and reports `false` unless the snapshot round trip has genuinely
@@ -250,7 +263,58 @@ are true. Two were not, and both are corrected here and in
   rule-based extractor parses the *user's chat question*
   (`intent_classifier._extract_entities`), not case text, and `Crime.description`
   is a fixed modus-operandi label from the seed generator rather than prose. So the
-  gap was bigger than stated: no free-text case analysis existed at all.
+  gap was bigger than stated: no free-text case analysis existed at all. It exists
+  now, at `POST /api/narrative/analyse`.
+
+### What the SDK cost the second time round
+
+The docs still 404, so four more facts had to be measured rather than read. They are
+recorded in the `catalyst.py` docstring and used as test fixtures, so nobody has to
+find them twice:
+
+- **Zia's response shapes.** Every text call returns a *list* with one element per
+  document, and every numeric field in the NER response is a *string* — including
+  the indices and the confidence score. `Money` entities carry `fine_entities`
+  splitting the currency symbol from the value. Established with
+  `GET /api/system/zia-probe`, which returns the raw response verbatim, before any
+  feature was built on it.
+- **Cache and SmartBrowz want opposite things from an options dict.** Stratus and
+  Cache copy option values into outgoing HTTP *headers*, where a boolean raises
+  `InvalidHeader` and everything must be a string. SmartBrowz puts them in a JSON
+  *body*, where a boolean is correct. Generalising the first lesson to the second is
+  what broke the first PDF attempt.
+- **The accessor is `app.smart_browz()`, with an underscore.** `app.smartbrowz()`
+  raises `AttributeError`, and a hand-written test fake happily answered to the
+  wrong name — so the tests passed while the deployed app failed. There is now a
+  test that checks accessor names against the real `CatalystApp` class rather than
+  against a fake.
+- **The SDK contradicts itself about daily crons.** `CronType.CALENDER` is the
+  string `"Calender"` while `ICatalystDailyCron` declares `Literal["Calendar"]`.
+  Rather than pick one, `create_daily_cron` tries both and reports which the API
+  accepted.
+
+### What is not working, and why
+
+Two services were built, called for real, and refused. Both are reported by
+`GET /api/system/services` with the API's own error quoted, under a status —
+`not-available` — that is deliberately distinct from "we did not configure it" and
+"we chose not to":
+
+- **Mail** returns `INVALID_ID: No such from_email with the given id exists`. The
+  sender address has to be registered in the Catalyst console; setting the
+  environment variable is not enough. The digest renders, addresses itself and
+  reports honestly that it did not send.
+- **SmartBrowz** returns `INVALID_ID: No such User with the given id exists` for
+  every request, including a trivial document with no options at all — established
+  with an option matrix at `GET /api/system/smartbrowz-probe`. That is the account's
+  provisioning, not a malformed request. `GET /api/compliance/report.pdf` therefore
+  serves the same report as a complete A4 print-laid-out HTML document and names the
+  reason in a response header. The report works; only server-side rendering does not.
+
+**Job Scheduling** answers, and the code to schedule the digest is complete and
+tested, but the project has no jobpool — the one thing that can only be created in
+the console. The inventory names it as the single remaining blocker rather than
+claiming the service is configured.
 
 ---
 

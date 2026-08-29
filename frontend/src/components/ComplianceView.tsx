@@ -72,6 +72,61 @@ const ComplianceView = ({ language }: { language: 'en' | 'kn' }) => {
   const [error, setError] = useState<string | null>(null);
   // Default to the cases needing action: that is why an officer opens this view.
   const [filter, setFilter] = useState<Filter>('action');
+  const [downloading, setDownloading] = useState(false);
+  const [downloadNote, setDownloadNote] = useState<string | null>(null);
+
+  /**
+   * Fetch the report as a document.
+   *
+   * A plain <a href> cannot be used: the endpoint needs the bearer token, and a
+   * link would send an unauthenticated request. So the response is fetched as a
+   * blob and handed to a temporary anchor.
+   *
+   * The endpoint returns a real PDF when Catalyst SmartBrowz renders it and a
+   * print-laid-out HTML page otherwise, naming the reason in a header. Both are
+   * handled here rather than assuming one: a PDF downloads, and the HTML opens in
+   * a new tab where the officer can print it. Which one happened is stated.
+   */
+  const downloadReport = async () => {
+    setDownloading(true); setDownloadNote(null);
+    try {
+      const res = await apiFetch('/api/compliance/report.pdf');
+      if (!res.ok) {
+        setDownloadNote(t('The report could not be generated.',
+                          'ವರದಿಯನ್ನು ರಚಿಸಲಾಗಲಿಲ್ಲ.'));
+        return;
+      }
+      const renderer = res.headers.get('X-Report-Renderer') || '';
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const stamp = data?.generated_at || 'report';
+
+      if (renderer === 'catalyst-smartbrowz') {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ksp-compliance-report-${stamp}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setDownloadNote(t('PDF downloaded, rendered by Catalyst SmartBrowz.',
+                          'PDF ಡೌನ್‌ಲೋಡ್ ಆಗಿದೆ, Catalyst SmartBrowz ಮೂಲಕ.'));
+      } else {
+        // Opened rather than downloaded: an .html file on disk is less useful
+        // than a page the officer can print straight away with Ctrl+P.
+        window.open(url, '_blank', 'noopener');
+        setDownloadNote(t('Opened as a print-ready A4 page — use Ctrl+P to save as PDF. Server-side PDF rendering was unavailable.',
+                          'ಮುದ್ರಣ-ಸಿದ್ಧ A4 ಪುಟವಾಗಿ ತೆರೆಯಲಾಗಿದೆ — PDF ಆಗಿ ಉಳಿಸಲು Ctrl+P ಬಳಸಿ.'));
+      }
+      // Give the browser time to start the download or open the tab.
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e: any) {
+      setDownloadNote(e.message === 'UNAUTHORIZED'
+        ? t('Session expired. Please sign in again.', 'ಅವಧಿ ಮುಗಿದಿದೆ. ಮತ್ತೆ ಸೈನ್ ಇನ್ ಮಾಡಿ.')
+        : t('Could not reach the report service.', 'ವರದಿ ಸೇವೆಯನ್ನು ತಲುಪಲಾಗಲಿಲ್ಲ.'));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -126,8 +181,29 @@ const ComplianceView = ({ language }: { language: 'en' | 'kn' }) => {
         <div style={{ textAlign: 'right', ...noteText }}>
           <div><strong>{t('As on', 'ದಿನಾಂಕದಂತೆ')}:</strong> {asOn(data.generated_at)}</div>
           <div>{t('Source: Official FIR records', 'ಮೂಲ: ಅಧಿಕೃತ FIR ದಾಖಲೆಗಳು')}</div>
+          {/* A station review is carried on paper, not on a screen. */}
+          <button type="button" onClick={downloadReport} disabled={downloading}
+            style={{
+              marginTop: 8, background: GOV.navy, color: '#fff', border: 'none',
+              borderRadius: 5, padding: '7px 13px', fontSize: 12.5,
+              fontWeight: 700, cursor: downloading ? 'default' : 'pointer',
+              opacity: downloading ? 0.6 : 1,
+            }}>
+            {downloading
+              ? t('Preparing...', 'ಸಿದ್ಧಪಡಿಸುತ್ತಿದೆ...')
+              : t('Download full report', 'ಪೂರ್ಣ ವರದಿ ಡೌನ್‌ಲೋಡ್')}
+          </button>
         </div>
       </div>
+
+      {downloadNote && (
+        <div style={{
+          ...noteText, marginTop: -8, marginBottom: 14, textAlign: 'right',
+          color: GOV.muted,
+        }}>
+          {downloadNote}
+        </div>
+      )}
 
       {/* Summary strip. Action-required leads, because that is the decision. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>

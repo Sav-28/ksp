@@ -16,6 +16,7 @@ $h = @{ Authorization = "Bearer $($login.token)" }
 $paths = @(
     "/api/health", "/api/me",
     "/api/system/info", "/api/system/services", "/api/system/catalyst-probe",
+    "/api/system/zia-probe",
     "/api/stats", "/api/sociological", "/api/hotspots", "/api/anomalies",
     "/api/clearance", "/api/forecast", "/api/gangs", "/api/offenders",
     "/api/officer-caseload", "/api/patterns/mo", "/api/trends/seasonal",
@@ -23,7 +24,10 @@ $paths = @(
     "/api/network/overview", "/api/network/search",
     "/api/reference/registration",
     "/api/compliance/report", "/api/compliance/stations",
-    "/api/compliance/custody-clock", "/api/compliance/digest?send=false"
+    "/api/compliance/custody-clock", "/api/compliance/digest?send=false",
+    # Returns a PDF when SmartBrowz renders, otherwise a print-ready HTML page.
+    # Either is a 200; the renderer is named in the X-Report-Renderer header.
+    "/api/compliance/report.pdf"
 )
 
 # /api/audit is role-gated, so it is checked as the supervisor instead. An
@@ -59,6 +63,13 @@ $personId = if ($offenders.offenders) { $offenders.offenders[0].person_id } else
 
 $extra = @{}
 $extra["/api/audit (as supervisor)"] = @{ url = "$base/api/audit"; head = $supH }
+# Admin-only diagnostics added by the Catalyst depth build.
+$adm = Invoke-RestMethod -Uri "$base/api/login" -Method Post `
+    -Body (@{ username = "admin"; password = "admin@2024" } | ConvertTo-Json) `
+    -ContentType "application/json" -TimeoutSec 120
+$admH = @{ Authorization = "Bearer $($adm.token)" }
+$extra["/api/system/jobs (as admin)"] = @{ url = "$base/api/system/jobs"; head = $admH }
+$extra["/api/system/smartbrowz-probe (admin)"] = @{ url = "$base/api/system/smartbrowz-probe"; head = $admH }
 if ($fir) {
     $extra["/api/crime/{fir}"]          = @{ url = "$base/api/crime/$fir";           head = $h }
     $extra["/api/cases/{fir}/summary"]  = @{ url = "$base/api/cases/$fir/summary";   head = $h }
