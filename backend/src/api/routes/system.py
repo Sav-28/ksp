@@ -260,6 +260,94 @@ async def schedule_digest(
     }
 
 
+@router.get("/system/smartbrowz-probe")
+async def smartbrowz_probe(
+    username: str = Depends(require_role("admin")),
+) -> Dict[str, Any]:
+    """
+    Find out what SmartBrowz will actually render here.
+
+    A render failure returns an opaque 500 that says nothing about which option
+    caused it, and bisecting by redeploy costs several minutes per guess. So this
+    runs a matrix in one request: trivial HTML with no options, then each option
+    group added, then the real report. Whichever row first fails is the answer.
+
+    Admin-only because it renders the compliance report, and it is a diagnostic
+    rather than a feature.
+    """
+    from src.services import catalyst, compliance, report_pdf
+
+    tiny = ("<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>"
+            "<body><h1>KSP probe</h1><p>Rupee sign check: Rs 85,000</p></body></html>")
+
+    matrix = [
+        ("tiny, no options", tiny, {}),
+        ("tiny, pdf_options only", tiny, catalyst.PDF_DEFAULT_OPTIONS),
+        ("tiny, format only", tiny, {"pdf_options": {"format": "A4"}}),
+        ("tiny, print_background only", tiny,
+         {"pdf_options": {"print_background": True}}),
+        ("tiny, margin only", tiny,
+         {"pdf_options": {"margin": {"top": "12mm", "bottom": "14mm",
+                                     "left": "12mm", "right": "12mm"}}}),
+        ("tiny, page_options viewport", tiny,
+         {"page_options": {"viewport": {"width": 1240, "height": 1754}}}),
+        ("tiny, navigation_options", tiny,
+         {"navigation_options": {"wait_until": "load", "timeout": 30000}}),
+    ]
+
+    results = []
+    for label, html, options in matrix:
+        pdf = catalyst.convert_to_pdf(html, **options)
+        results.append({
+            "case": label,
+            "options": options,
+            "bytes": len(pdf) if pdf else 0,
+            "ok": bool(pdf),
+            "error": None if pdf else catalyst.diagnostics().get("last_smartbrowz_error"),
+        })
+
+    # The real document last, and only if something simpler already worked - there
+    # is no point sending 44 KB at a service that cannot render a heading.
+    if any(r["ok"] for r in results):
+        report = None
+        try:
+            from src.database.session import SessionLocal
+            session = SessionLocal()
+            try:
+                report = compliance.compliance_report(session)
+            finally:
+                session.close()
+        except Exception as exc:
+            results.append({"case": "real report", "options": {},
+                            "ok": False, "bytes": 0,
+                            "error": f"could not build the report: {exc}"})
+        if report is not None:
+            html = report_pdf.build_html(report)
+            pdf = catalyst.convert_to_pdf(html, **catalyst.PDF_DEFAULT_OPTIONS)
+            results.append({
+                "case": f"real report ({len(html)} chars of HTML)",
+                "options": catalyst.PDF_DEFAULT_OPTIONS,
+                "bytes": len(pdf) if pdf else 0,
+                "ok": bool(pdf),
+                "error": None if pdf else catalyst.diagnostics().get("last_smartbrowz_error"),
+            })
+    else:
+        results.append({"case": "real report", "options": {}, "ok": False,
+                        "bytes": 0,
+                        "error": "skipped - no simpler case rendered"})
+
+    first_failure = next((r["case"] for r in results if not r["ok"]), None)
+    return {
+        "why": ("A SmartBrowz 500 does not say which option caused it. This runs "
+                "the cases in increasing complexity so the first failure "
+                "identifies the cause."),
+        "results": results,
+        "first_failure": first_failure,
+        "any_success": any(r["ok"] for r in results),
+        "sdk": catalyst.diagnostics(),
+    }
+
+
 @router.get("/system/zia-probe")
 async def zia_probe(
     username: str = Depends(get_current_user),

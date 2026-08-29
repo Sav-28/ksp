@@ -5,7 +5,7 @@ Separate from the analytics routes on purpose: these answer the operational
 question a station actually opens the system for - which cases are about to
 breach a deadline, and where is work piling up.
 """
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional
 
@@ -61,6 +61,50 @@ async def compliance_report(
     # against. The nested analysis dicts are never mutated, so a shallow copy is
     # enough and avoids deep-copying a ~20 KB payload per request.
     return {**data, "cache": {"source": source, "ttl_seconds": 300}}
+
+
+@router.get("/compliance/report.pdf")
+async def compliance_report_pdf(
+    db: Session = Depends(get_db),
+    username: str = Depends(get_current_user),
+):
+    """
+    The station compliance report as a downloadable document.
+
+    Rendered by Catalyst SmartBrowz from the same payload the JSON endpoint
+    returns, so the document cannot disagree with the screen it came from.
+
+    DEGRADES RATHER THAN FAILS. If SmartBrowz does not answer, this returns the
+    same report as HTML with X-Report-Renderer and X-Report-Fallback-Reason
+    headers naming what happened. A printable page beats an error page, and the
+    substitution is stated rather than silent.
+    """
+    from src.services import report_pdf
+
+    data, source = cache.get_or_compute(
+        "compliance:report:v1", 300, lambda: svc.compliance_report(db))
+    result = report_pdf.build_pdf(data)
+
+    stamp = data.get("generated_at", "report")
+    common = {
+        "X-Report-Renderer": result["renderer"],
+        "X-Report-Cache-Source": source,
+    }
+    if result["pdf"]:
+        return Response(
+            content=result["pdf"],
+            media_type="application/pdf",
+            headers={
+                **common,
+                "Content-Disposition":
+                    f'attachment; filename="ksp-compliance-report-{stamp}.pdf"',
+            },
+        )
+    return Response(
+        content=result["html"],
+        media_type="text/html; charset=utf-8",
+        headers={**common, "X-Report-Fallback-Reason": str(result["reason"])[:300]},
+    )
 
 
 @router.get("/compliance/custody-clock")

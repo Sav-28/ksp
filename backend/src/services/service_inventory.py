@@ -158,6 +158,38 @@ def _job_scheduling_status() -> tuple:
     return ("configured", detail)
 
 
+def _smartbrowz_status() -> tuple:
+    """
+    (status, detail) for SmartBrowz.
+
+    Needs no environment variable, so as with Zia the only evidence is a render
+    having actually returned PDF bytes.
+    """
+    diag = catalyst.diagnostics()
+    if diag.get("smartbrowz_succeeded_at_least_once"):
+        return ("live",
+                "The station compliance report is rendered to PDF from HTML by "
+                "SmartBrowz at GET /api/compliance/report.pdf, built from the same "
+                "payload the JSON endpoint returns so the document cannot disagree "
+                "with the screen. If SmartBrowz stops answering the endpoint serves "
+                "the same report as HTML and names the reason in a response header.")
+    if diag.get("last_smartbrowz_error"):
+        return ("not-available",
+                f"Attempted and rejected by the service, not skipped: "
+                f"{diag['last_smartbrowz_error']} Measured across a matrix of "
+                f"option combinations at GET /api/system/smartbrowz-probe, "
+                f"including a trivial document with no options at all, so this is "
+                f"the account's SmartBrowz provisioning rather than a bad request "
+                f"from here. GET /api/compliance/report.pdf therefore serves the "
+                f"same report as a complete, print-laid-out A4 HTML document and "
+                f"names the reason in X-Report-Fallback-Reason. The report itself "
+                f"works; only server-side rendering does not.")
+    return ("configured",
+            "The code path exists and needs no environment variable, but no render "
+            "has been attempted yet in this instance. Open "
+            "GET /api/compliance/report.pdf and this entry will report the result.")
+
+
 def _mail_status() -> tuple:
     """
     (status, detail) for Mail.
@@ -220,6 +252,7 @@ def build() -> Dict[str, Any]:
     fs_status, fs_detail = _filestore_status()
     zia_status, zia_detail = _zia_status()
     job_status, job_detail = _job_scheduling_status()
+    browz_status, browz_detail = _smartbrowz_status()
 
     diag = catalyst.diagnostics()
 
@@ -342,12 +375,26 @@ def build() -> Dict[str, Any]:
             "detail": job_detail,
         },
         {
-            "service": "NoSQL / Search / Push / SmartBrowz / Circuits",
+            "service": "SmartBrowz (headless rendering)",
+            "category": "documents",
+            "status": browz_status,
+            "call_site": "src/services/catalyst.py html_to_pdf, driven by "
+                         "src/services/report_pdf.py for "
+                         "GET /api/compliance/report.pdf",
+            "detail": browz_detail,
+        },
+        {
+            "service": "NoSQL / Search / Push / Circuits / SmartBrowz Dataverse",
             "category": "mixed",
             "status": "not-used",
             "call_site": None,
-            "detail": "No call site. Listed so this inventory is a complete account "
-                      "rather than only the services that flatter the project.",
+            "detail": "No call site. Search indexes Data Store tables, which this "
+                      "project does not use. Push needs a registered mobile or web "
+                      "client. Circuits orchestrates Functions, of which there are "
+                      "none. SmartBrowz Dataverse is business-lead enrichment, "
+                      "which has nothing to do with policing. Listed so this "
+                      "inventory is a complete account rather than only the "
+                      "services that flatter the project.",
         },
     ]
 
@@ -367,6 +414,10 @@ def build() -> Dict[str, Any]:
             "live": "called on the default request path and observed to work",
             "configured": "prerequisites set, but no successful call observed yet",
             "not-configured": "code path exists; a prerequisite is missing, named in detail",
+            "not-available": ("called for real and refused by the service itself, "
+                              "with the API's own error quoted. Distinct from "
+                              "not-configured, which is something we can fix, and "
+                              "from not-used, which we chose"),
             "not-used": "no call site in this repository; the reason is stated",
             "platform": "the project runs on it without an SDK call from the app",
             "note": "Status is derived from configuration and observed behaviour. "

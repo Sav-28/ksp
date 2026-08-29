@@ -98,12 +98,27 @@ def test_zia_ocr_and_face_remain_listed_as_unused():
 
 def test_every_inventory_entry_has_a_status_and_a_reason():
     """A status with no explanation is an assertion, which is what this endpoint exists to avoid."""
-    valid = {"live", "configured", "not-configured", "not-used", "platform"}
+    valid = {"live", "configured", "not-configured", "not-available",
+             "not-used", "platform"}
     for s in _inventory()["services"]:
         assert s["status"] in valid, f"{s['service']} has status {s['status']!r}"
         assert s["detail"] and len(s["detail"]) > 40, f"{s['service']} has no real reason"
         if s["status"] != "not-used":
             assert s["call_site"], f"{s['service']} is claimed used with no call site"
+
+
+def test_every_status_used_is_explained_in_how_to_read_this():
+    """
+    The legend and the statuses must not drift. 'not-available' was added when
+    SmartBrowz turned out to be refused by the service rather than merely
+    unconfigured, and a status with no entry in the legend is unreadable.
+    """
+    inv = _inventory()
+    legend = set(inv["how_to_read_this"])
+    for s in inv["services"]:
+        assert s["status"] in legend, (
+            f"status {s['status']!r} has no explanation in how_to_read_this"
+        )
 
 
 # --- 2. The cached compliance payload must not be annotated in place -------
@@ -423,6 +438,216 @@ def test_send_mail_records_why_it_could_not_send(monkeypatch):
     assert r["sent"] is False
     assert catalyst.diagnostics()["last_mail_error"]
     catalyst._state["last_mail_error"] = None
+
+
+# --- 4e. The PDF report ------------------------------------------------------
+SAMPLE_REPORT = {
+    "generated_at": "2026-08-29",
+    "custody_clock": {
+        "total_under_clock": 2,
+        "counts": {"breached": 1, "critical": 1, "warning": 0, "on_track": 0},
+        "action_required": 2,
+        "cases": [
+            {"crime_no": "100110034202600001", "crime_type": "Theft",
+             "police_station": "Jayanagar", "district": "Bengaluru Urban",
+             "case_status": "Registered", "gravity": "Non-Heinous",
+             "arrest_date": "2026-05-01", "days_in_custody": 120,
+             "statutory_limit_days": 60, "days_remaining": -60,
+             "compliance_status": "Breached"},
+            {"crime_no": "100110034202600002", "crime_type": "Robbery",
+             "police_station": "Wilson Garden", "district": "Bengaluru Urban",
+             "case_status": "Registered", "gravity": "Heinous",
+             "arrest_date": "2026-06-01", "days_in_custody": 85,
+             "statutory_limit_days": 90, "days_remaining": 5,
+             "compliance_status": "Critical"},
+        ],
+        "legal_basis": "BNSS 187", "disclaimer": "Indicative only.",
+    },
+    "investigation_pendency": {"total_open": 40, "oldest_open_days": 900,
+                               "age_profile": [{"bucket": "0-30", "count": 5}],
+                               "note": "A disposal measure."},
+    "station_scoreboard": {"stations": [{"police_station": "Jayanagar",
+                                         "district": "Bengaluru Urban",
+                                         "registered": 10, "disposed": 4,
+                                         "still_open": 6,
+                                         "disposal_rate_pct": 40.0}],
+                           "note": "At least 5 registered."},
+    "officer_workload": {"officers": [{"officer": "PI Rao", "total_cases": 12,
+                                       "open_cases": 9,
+                                       "open_with_accused_in_custody": 2,
+                                       "load_vs_average_pct": 50.0,
+                                       "overloaded": True}],
+                         "note": "Open caseload."},
+    "headline": {"action_required": 2, "breached": 1, "critical": 1,
+                 "open_investigations": 40, "oldest_open_days": 900},
+}
+
+
+def test_report_html_is_a_complete_document_with_a_charset():
+    """
+    A fragment without a charset declaration is what makes an HTML-to-PDF renderer
+    mangle the rupee sign and Kannada district names.
+    """
+    from src.services import report_pdf
+
+    html = report_pdf.build_html(SAMPLE_REPORT)
+    assert html.startswith("<!DOCTYPE html>")
+    assert '<meta charset="utf-8">' in html
+    assert "</html>" in html.strip()[-10:]
+
+
+def test_report_html_carries_the_figures_and_the_disclaimer():
+    from src.services import report_pdf
+
+    html = report_pdf.build_html(SAMPLE_REPORT)
+    assert "100110034202600001" in html
+    assert "60 days over" in html, "a breach should read as days over, not negative"
+    assert "5 days left" in html
+    assert "BNSS 187" in html
+    assert "synthetic data" in html, "the provenance note must survive into the document"
+
+
+def test_every_interpolated_value_is_escaped():
+    """
+    The digest this renderer replaced interpolated raw. A PDF served over HTTP,
+    built partly from a station name an officer typed, must not.
+    """
+    from src.services import report_pdf
+
+    hostile = dict(SAMPLE_REPORT)
+    clock = dict(hostile["custody_clock"])
+    case = dict(clock["cases"][0])
+    case["police_station"] = '<script>alert("xss")</script>'
+    case["crime_type"] = 'Theft" onmouseover="evil()'
+    clock["cases"] = [case]
+    hostile["custody_clock"] = clock
+
+    html = report_pdf.build_html(hostile)
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+    assert 'onmouseover="evil()"' not in html
+
+
+def test_the_shared_renderer_is_what_the_digest_uses():
+    """
+    The digest and the PDF must not drift on a statutory deadline. Both call
+    report_html.custody_table, so the same case renders identically in each.
+    """
+    from src.services import digest, report_html, report_pdf
+
+    cases = SAMPLE_REPORT["custody_clock"]["cases"]
+    shared = report_html.custody_table(cases)
+    assert shared in digest._render_html(cases, SAMPLE_REPORT["custody_clock"], "2026-08-29")
+    assert shared in report_pdf.build_html(SAMPLE_REPORT)
+
+
+def test_empty_custody_clock_renders_a_good_news_panel_not_an_empty_table():
+    from src.services import report_html
+
+    out = report_html.custody_table([])
+    assert "<table" not in out
+    assert "none has exceeded it" in out
+
+
+def test_build_pdf_falls_back_to_html_with_a_reason(monkeypatch):
+    """Off Catalyst there is no renderer, so the HTML path is the normal one."""
+    from src.services import report_pdf
+
+    result = report_pdf.build_pdf(SAMPLE_REPORT)
+    assert result["pdf"] is None
+    assert result["renderer"] == "html-print-ready"
+    assert result["reason"]
+    assert result["html"].startswith("<!DOCTYPE html>")
+    assert "Ctrl+P" in result["html"], "the fallback must tell the reader how to print"
+
+
+def test_html_to_pdf_rejects_a_response_that_is_not_a_pdf(monkeypatch):
+    """
+    An error page returned with HTTP 200 would otherwise be served to a browser as
+    a corrupt download named .pdf.
+    """
+    from src.services import catalyst
+
+    class FakeResp:
+        content = b"<html>error</html>"
+
+    class FakeBrowz:
+        def convert_to_pdf(self, source, **kwargs):
+            return FakeResp()
+
+    class FakeApp:
+        # smart_browz, with the underscore. The obvious spelling raised
+        # AttributeError against the real SDK and this fake originally hid that,
+        # which is why the accessor name is now pinned by a test below.
+        def smart_browz(self):
+            return FakeBrowz()
+
+    monkeypatch.setattr(catalyst, "get_app", lambda: FakeApp())
+    assert catalyst.html_to_pdf("<html></html>") is None
+    assert "not a PDF" in catalyst.diagnostics()["last_smartbrowz_error"]
+
+
+def test_html_to_pdf_accepts_real_pdf_bytes(monkeypatch):
+    from src.services import catalyst
+
+    class FakeResp:
+        content = b"%PDF-1.4 fake body"
+
+    class FakeBrowz:
+        def convert_to_pdf(self, source, **kwargs):
+            return FakeResp()
+
+    class FakeApp:
+        def smart_browz(self):
+            return FakeBrowz()
+
+    monkeypatch.setattr(catalyst, "get_app", lambda: FakeApp())
+    assert catalyst.html_to_pdf("<html></html>") == b"%PDF-1.4 fake body"
+    assert catalyst.smartbrowz_used_successfully() is True
+    catalyst._state["smartbrowz_ok_once"] = False
+
+
+def test_the_sdk_accessor_names_this_project_relies_on_all_exist():
+    """
+    A hand-written fake will happily answer to a method the real SDK does not
+    have. That is exactly what happened: html_to_pdf called app.smartbrowz() and
+    the tests passed, while the deployed app returned AttributeError. This asserts
+    the accessors against the real CatalystApp class instead.
+    """
+    from zcatalyst_sdk.catalyst_app import CatalystApp
+
+    for name in ("smart_browz", "zia", "stratus", "cache", "email",
+                 "job_scheduling", "filestore"):
+        assert hasattr(CatalystApp, name), (
+            f"CatalystApp has no {name}() - a call site in this project is wrong"
+        )
+    assert not hasattr(CatalystApp, "smartbrowz"), (
+        "if the SDK ever adds smartbrowz(), drop the underscore comment in catalyst.py"
+    )
+
+
+def test_report_pdf_endpoint_serves_a_print_ready_page_when_smartbrowz_is_absent():
+    r = client.get("/api/compliance/report.pdf", headers=_auth())
+    assert r.status_code == 200
+    assert r.headers["X-Report-Renderer"] == "html-print-ready"
+    assert r.headers["X-Report-Fallback-Reason"]
+    assert r.headers["content-type"].startswith("text/html")
+    # The fallback has to be a usable document, not a web page: A4 page rules and
+    # an instruction that disappears when printed.
+    assert "@page" in r.text and "size: A4" in r.text
+    assert "Ctrl+P" in r.text
+    assert "no-print" in r.text
+
+
+def test_the_print_hint_appears_only_on_the_fallback_path():
+    from src.services import report_pdf
+
+    assert "Ctrl+P" not in report_pdf.build_html(SAMPLE_REPORT)
+    assert "Ctrl+P" in report_pdf.build_html(SAMPLE_REPORT, print_hint=True)
+
+
+def test_report_pdf_endpoint_requires_auth():
+    assert client.get("/api/compliance/report.pdf").status_code == 401
 
 
 # --- 5. Narrative analysis ---------------------------------------------------

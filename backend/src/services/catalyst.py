@@ -29,6 +29,10 @@ codebase never has to guess:
     app.email()     -> Email
         .send_mail({from_email, to_email: List[str], subject, content,
                     html_mode, display_name, cc, bcc, reply_to, attachments})
+    app.smart_browz() -> SmartBrowz          # NOT smartbrowz - underscore matters
+        .convert_to_pdf(source, pdf_options, page_options, navigation_options)
+        # `source` is sent as a URL when it parses as one, otherwise as raw HTML.
+        # Returns the requests Response, so PDF bytes are at .content.
     app.job_scheduling() -> JobScheduling
         .get_all_jobpool() / .get_jobpool(id)
         .cron  -> .get_all() / .get(id) / .create(details) / .update(id, details)
@@ -120,6 +124,8 @@ _state: Dict[str, Any] = {
     "jobs_ok_once": False,
     "last_mail_error": None,
     "mail_ok_once": False,
+    "last_smartbrowz_error": None,
+    "smartbrowz_ok_once": False,
 }
 
 
@@ -562,6 +568,91 @@ def mail_used_successfully() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# SmartBrowz (headless rendering)
+# ---------------------------------------------------------------------------
+def html_to_pdf(html: str) -> Optional[bytes]:
+    """
+    Render an HTML document to PDF bytes, or None if SmartBrowz did not answer.
+
+    convert_to_pdf treats its `source` as a URL when it looks like one and as raw
+    HTML otherwise, so a full document string is passed directly - no need to host
+    the report anywhere first.
+
+    Option values here are real booleans and nested dicts, NOT strings - which is
+    the opposite of the Stratus rule in this module. Stratus copies option values
+    into outgoing HTTP HEADERS, where a bool raises InvalidHeader; SmartBrowz puts
+    them in a JSON BODY, where a bool is correct and a stringified one is not. The
+    two are different for a reason, and generalising the Stratus lesson to here is
+    what produced the first failed attempt at this call.
+
+    Shape confirmed from PdfOptions in smartbrowz/_types.py: `margin` is a nested
+    dict with top/bottom/left/right, not flat margin_top keys.
+    """
+    return convert_to_pdf(html, **PDF_DEFAULT_OPTIONS)
+
+
+# Defaults for the compliance report, as a module constant so the probe endpoint
+# can render both with and without them and show which of them matters.
+PDF_DEFAULT_OPTIONS: Dict[str, Any] = {
+    "pdf_options": {
+        "format": "A4",
+        "print_background": True,
+        "margin": {"top": "12mm", "bottom": "14mm",
+                   "left": "12mm", "right": "12mm"},
+    },
+}
+
+
+def convert_to_pdf(html: str, **options: Any) -> Optional[bytes]:
+    """
+    One SmartBrowz render with exactly the options given. PDF bytes, or None.
+
+    Options pass through untouched so a caller can vary them and find out what the
+    service actually accepts. GET /api/system/smartbrowz-probe does precisely that,
+    because a 500 from a render says nothing about which option caused it and
+    bisecting by redeploy is slow.
+    """
+    if not html:
+        return None
+    app = get_app()
+    if app is None:
+        _state["last_smartbrowz_error"] = (
+            f"Catalyst SDK not initialised "
+            f"({_state['last_init_error'] or 'no credentials in scope'})"
+        )
+        return None
+    try:
+        # smart_browz(), with the underscore. The class is SmartBrowz and every
+        # other accessor on CatalystApp is the lowercased class name, so the
+        # obvious guess (smartbrowz) raises AttributeError.
+        resp = app.smart_browz().convert_to_pdf(html, **options)
+        content = getattr(resp, "content", None)
+        if not content:
+            _state["last_smartbrowz_error"] = "convert_to_pdf returned no content"
+            return None
+        # A PDF starts with %PDF-. Anything else is an error page rendered as a
+        # 200, which would otherwise be served to a browser as a corrupt download.
+        if not bytes(content[:5]) == b"%PDF-":
+            _state["last_smartbrowz_error"] = (
+                f"convert_to_pdf returned {len(content)} bytes that are not a PDF "
+                f"(starts with {bytes(content[:16])!r})"
+            )
+            return None
+        _state["last_smartbrowz_error"] = None
+        _state["smartbrowz_ok_once"] = True
+        return bytes(content)
+    except Exception as exc:
+        _state["last_smartbrowz_error"] = f"{type(exc).__name__}: {exc}"[:400]
+        log.debug("SmartBrowz convert_to_pdf failed: %s", exc)
+        return None
+
+
+def smartbrowz_used_successfully() -> bool:
+    """Whether a PDF has actually been rendered in this process."""
+    return bool(_state.get("smartbrowz_ok_once"))
+
+
+# ---------------------------------------------------------------------------
 # Diagnostics, for the service inventory endpoint
 # ---------------------------------------------------------------------------
 def diagnostics() -> Dict[str, Any]:
@@ -581,6 +672,8 @@ def diagnostics() -> Dict[str, Any]:
         "last_job_error": _state["last_job_error"],
         "mail_succeeded_at_least_once": _state["mail_ok_once"],
         "last_mail_error": _state["last_mail_error"],
+        "smartbrowz_succeeded_at_least_once": _state["smartbrowz_ok_once"],
+        "last_smartbrowz_error": _state["last_smartbrowz_error"],
         "appsail_target_id_present": bool(appsail_target_id()),
         # Presence and age only - the header values are credentials.
         "gateway_headers_captured": captures,

@@ -22,6 +22,7 @@ from typing import Any, Dict, List
 from sqlalchemy.orm import Session
 
 from src.services import catalyst
+from src.services import report_html as R
 from src.services.compliance import custody_clock, DISCLAIMER
 
 # Cases at or inside this many days of the statutory limit are the ones a digest
@@ -46,68 +47,24 @@ def _rows_for_digest(clock: Dict[str, Any]) -> List[Dict[str, Any]]:
 def _render_html(rows: List[Dict[str, Any]], clock: Dict[str, Any],
                  as_on: str) -> str:
     """
-    Plain, table-driven HTML.
+    Mail-body fragment, built from the shared renderer in report_html.
 
-    Deliberately inline-styled and free of external assets: mail clients strip
-    stylesheets, and this has to be legible in whatever the officer opens it in.
+    The table used to be assembled here by hand. It moved so that the digest and
+    the downloadable PDF cannot disagree about a statutory deadline - a supervisor
+    reading different breach counts in an email and its attached report has no way
+    to know which one to act on. The move also brought escaping with it: this
+    function previously interpolated crime numbers and station names raw.
     """
-    if not rows:
-        body = (
-            '<p style="margin:0;padding:12px;background:#eaf2ea;'
-            'border-left:3px solid #1b5e20;">No case is within '
-            f'{DIGEST_HORIZON_DAYS} days of its statutory chargesheet deadline, '
-            'and none has exceeded it.</p>'
+    body = R.custody_table(rows)
+    return R.fragment(
+        R.heading("Custody Clock Digest - chargesheet deadlines", f"As on {as_on}")
+        + R.counts_strip(clock)
+        + body
+        + R.footnote(
+            f"<strong>Statutory basis:</strong> {R.esc(clock.get('legal_basis', ''))}",
+            f"<em>{R.esc(DISCLAIMER)}</em>",
         )
-    else:
-        cells = []
-        for c in rows:
-            breached = c["days_remaining"] < 0
-            tone = "#8e0000" if breached else "#b34700"
-            remaining = (f'{abs(c["days_remaining"])} days over'
-                         if breached else f'{c["days_remaining"]} days left')
-            cells.append(
-                '<tr>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;'
-                f'font-family:Consolas,monospace;">{c["crime_no"]}</td>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;">{c["crime_type"] or "-"}</td>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;">{c["police_station"] or "-"}</td>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;text-align:right;">'
-                f'{c["days_in_custody"]} / {c["statutory_limit_days"]}</td>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;text-align:right;'
-                f'color:{tone};font-weight:700;">{remaining}</td>'
-                f'<td style="padding:6px 9px;border:1px solid #c9ccd4;color:{tone};">'
-                f'{c["compliance_status"]}</td>'
-                '</tr>'
-            )
-        header = "".join(
-            f'<th style="padding:6px 9px;border:1px solid #9aa0ad;background:#eceef3;'
-            f'text-align:left;font-size:11px;text-transform:uppercase;">{h}</th>'
-            for h in ("Crime No.", "Offence", "Police station", "Day", "Remaining", "Status")
-        )
-        body = (
-            '<table style="border-collapse:collapse;font-size:13px;width:100%;">'
-            f'<thead><tr>{header}</tr></thead><tbody>{"".join(cells)}</tbody></table>'
-        )
-
-    counts = clock.get("counts", {})
-    return f"""<div style="font-family:Segoe UI,Arial,sans-serif;color:#1c1c1c;">
-  <div style="border-bottom:2px solid #1a237e;padding-bottom:8px;margin-bottom:14px;">
-    <div style="font-size:17px;font-weight:700;color:#1a237e;">
-      Custody Clock Digest &mdash; chargesheet deadlines
-    </div>
-    <div style="font-size:12px;color:#5c5c5c;">As on {as_on}</div>
-  </div>
-  <div style="font-size:13px;margin-bottom:12px;">
-    <strong>{counts.get('breached', 0)}</strong> case(s) past the statutory period
-    &middot; <strong>{counts.get('critical', 0)}</strong> due within 7 days
-    &middot; <strong>{clock.get('total_under_clock', 0)}</strong> under the clock in total
-  </div>
-  {body}
-  <div style="margin-top:14px;font-size:11px;color:#5c5c5c;line-height:1.6;">
-    <div><strong>Statutory basis:</strong> {clock.get('legal_basis', '')}</div>
-    <div style="margin-top:4px;"><em>{DISCLAIMER}</em></div>
-  </div>
-</div>"""
+    )
 
 
 def build_and_maybe_send(db: Session, send: bool = False) -> Dict[str, Any]:
