@@ -85,6 +85,36 @@ def _cache_status() -> tuple:
             "Every response names which tier answered.")
 
 
+def _zia_status() -> tuple:
+    """
+    (status, detail) for Zia.
+
+    Zia needs no environment variable, so configuration could never be evidence
+    for it - the only thing that counts is a call having actually returned. Same
+    evidence-based rule as Stratus.
+    """
+    diag = catalyst.diagnostics()
+    if diag.get("zia_succeeded_at_least_once"):
+        return ("live",
+                "Named-entity recognition, keyword extraction and sentiment "
+                "analysis over the complainant statement typed during FIR "
+                "registration. Entities come from Zia; the offence type, IPC "
+                "section and district stay with this project's own authoritative "
+                "lists, because Zia does not classify offences. Every response "
+                "names which engine answered, and the rule-based analyser takes "
+                "over if Zia is unavailable.")
+    if diag.get("last_zia_error"):
+        return ("not-configured",
+                f"A Zia call was attempted and did not return: "
+                f"{diag['last_zia_error']} The rule-based analyser answers "
+                f"instead and /api/narrative/analyse reports engine='rules'.")
+    return ("configured",
+            "The code path exists and needs no environment variable, but no Zia "
+            "call has been made yet in this instance. Post a statement to "
+            "/api/narrative/analyse, or open GET /api/system/zia-probe, and this "
+            "entry will report what actually happened.")
+
+
 def _mail_status() -> tuple:
     if not os.getenv("MAIL_FROM", "").strip():
         return ("not-configured",
@@ -118,6 +148,7 @@ def build() -> Dict[str, Any]:
     cache_status, cache_detail = _cache_status()
     mail_status, mail_detail = _mail_status()
     fs_status, fs_detail = _filestore_status()
+    zia_status, zia_detail = _zia_status()
 
     services: List[Dict[str, Any]] = [
         {
@@ -205,24 +236,42 @@ def build() -> Dict[str, Any]:
                       "console-side model training.",
         },
         {
-            "service": "Zia Text Analytics / OCR / Face",
+            "service": "Zia Text Analytics",
+            "category": "ai",
+            "status": zia_status,
+            "call_site": "src/services/catalyst.py zia_ner/zia_keywords/"
+                         "zia_sentiment, driven by src/services/narrative.py for "
+                         "POST /api/narrative/analyse",
+            "detail": zia_detail,
+        },
+        {
+            "service": "Zia OCR / Face / Object detection",
             "category": "ai",
             "status": "not-used",
             "call_site": None,
-            "detail": "FIR narrative entity extraction is rule-based and already "
-                      "works. Zia would be a genuine upgrade to that existing code "
-                      "path and is the first thing to add next; it was deferred "
-                      "rather than rushed before the deadline.",
+            "detail": "Only Zia's text analytics is used. OCR would need scanned "
+                      "complaint documents to read and face matching would need a "
+                      "photo corpus; neither exists in this synthetic dataset, and "
+                      "building the upload path for them the day before submission "
+                      "would risk the working feature for an unusable one.",
         },
         {
             "service": "Cron / Job Scheduling",
             "category": "orchestration",
             "status": "not-used",
             "call_site": None,
-            "detail": "A scheduled trigger has to invoke a Catalyst Function, which "
-                      "means a second deployable alongside AppSail. The digest is "
-                      "exposed as an endpoint so a scheduler can call it once that "
-                      "Function exists.",
+            # CORRECTED. This entry previously claimed a scheduled trigger "has to
+            # invoke a Catalyst Function, which means a second deployable". That is
+            # wrong: zcatalyst_sdk/job_scheduling/_types.py defines TargetType
+            # FUNCTION, CIRCUIT, APPSAIL and WEBHOOK, and the AppSail and Webhook
+            # variants carry a url and headers - so a job can call this very app.
+            "detail": "Not used yet. The earlier reason given here - that a "
+                      "schedule must invoke a Catalyst Function, requiring a second "
+                      "deployable - was wrong: Job Scheduling supports AppSail and "
+                      "Webhook targets that take a URL and headers, so a job can "
+                      "call this app's own digest endpoint directly. The real "
+                      "remaining prerequisite is a jobpool, which is created in the "
+                      "Catalyst console.",
         },
         {
             "service": "NoSQL / Search / Push / SmartBrowz / Circuits",

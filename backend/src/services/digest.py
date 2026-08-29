@@ -30,10 +30,16 @@ DIGEST_HORIZON_DAYS = 7
 
 
 def _rows_for_digest(clock: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Breached cases first, then those falling due inside the horizon."""
+    """
+    Cases at or inside the horizon, breaches included.
+
+    `cases` arrives sorted most-urgent-first from custody_clock, so breaches lead
+    without re-sorting. The condition is a single comparison: a breach has a
+    negative days_remaining, which already satisfies <= the horizon.
+    """
     return [
         c for c in clock.get("cases", [])
-        if c["days_remaining"] < 0 or c["days_remaining"] <= DIGEST_HORIZON_DAYS
+        if c["days_remaining"] <= DIGEST_HORIZON_DAYS
     ]
 
 
@@ -104,12 +110,17 @@ def _render_html(rows: List[Dict[str, Any]], clock: Dict[str, Any],
 </div>"""
 
 
-def build_and_maybe_send(db: Session, send: bool = True) -> Dict[str, Any]:
+def build_and_maybe_send(db: Session, send: bool = False) -> Dict[str, Any]:
     """
     Assemble the digest and, when Mail is configured and `send` is set, deliver it.
 
     Always returns the rendered content, the rows behind it, and an explicit
     delivery outcome - so the caller can show the digest whether or not it sent.
+
+    `send` defaults to False so that sending is always an explicit act. It used to
+    default to True while its only route defaulted to False, which meant the safe
+    behaviour lived in the caller: any new call site that forgot the argument
+    would have dispatched real mail.
     """
     as_on = date.today().isoformat()
     clock = custody_clock(db)

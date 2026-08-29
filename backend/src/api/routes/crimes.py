@@ -413,6 +413,38 @@ def _parse_date(value: Optional[str], field: str) -> date:
         raise HTTPException(status_code=422, detail=f"'{field}' must be YYYY-MM-DD")
 
 
+@router.post("/narrative/analyse")
+async def analyse_narrative(
+    request: Dict[str, Any],
+    username: str = Depends(require_role(*CAN_REGISTER_ROLES)),
+) -> Dict[str, Any]:
+    """
+    Turn a complainant's statement into SUGGESTED FIR fields.
+
+    Gated to the roles that may register an FIR, because that is the only place
+    the output is used and there is no reason for an analyst to post case text.
+
+    The response is advisory. It suggests an offence type, an IPC section, a
+    district and whatever entities the analyser found; the officer confirms or
+    overrides each one. `engine` names what produced the suggestion so the
+    officer knows whether they are looking at a model's output or a keyword match.
+    """
+    text = (request.get("text") or "").strip()
+    if len(text) > 20000:
+        raise HTTPException(
+            status_code=422,
+            detail="Statement is too long to analyse (20,000 character limit).",
+        )
+
+    from src.services import narrative
+    result = narrative.analyse(text)
+    result["advisory"] = (
+        "Suggestions only. The offence classification and IPC section recorded on "
+        "an FIR are the registering officer's decision."
+    )
+    return result
+
+
 @router.post("/crimes", status_code=status.HTTP_201_CREATED)
 async def register_crime(
     request: Dict[str, Any],

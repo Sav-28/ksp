@@ -233,6 +233,25 @@ Verified against the deployed instance, not asserted: register an FIR, redeploy 
 `/tmp` is wiped, and the FIR is still there with `restore_result: restored`.
 `verify_deploy.ps1`, `deploy.ps1`, `verify_restart.ps1` run that sequence.
 
+### Two claims this document previously got wrong
+
+An inventory that lists its own gaps is only worth anything if the stated reasons
+are true. Two were not, and both are corrected here and in
+`GET /api/system/services`:
+
+- **Scheduling does not require a Catalyst Function.** The old reason for skipping
+  Cron was that a schedule must invoke a Function, meaning a second deployable
+  alongside AppSail. Reading `zcatalyst_sdk/job_scheduling/_types.py` shows
+  `TargetType.APPSAIL` and `TargetType.WEBHOOK` alongside `FUNCTION`, both carrying
+  a `url` and `headers` — a job can call this app's own endpoint. The real
+  prerequisite is a jobpool, created in the console.
+- **There was no FIR narrative extractor to upgrade.** The old Zia entry said
+  "FIR narrative entity extraction is rule-based and already works." The
+  rule-based extractor parses the *user's chat question*
+  (`intent_classifier._extract_entities`), not case text, and `Crime.description`
+  is a fixed modus-operandi label from the seed generator rather than prose. So the
+  gap was bigger than stated: no free-text case analysis existed at all.
+
 ---
 
 ## Data provenance

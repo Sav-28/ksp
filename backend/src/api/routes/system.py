@@ -117,6 +117,53 @@ async def catalyst_probe(
     }
 
 
+@router.get("/system/zia-probe")
+async def zia_probe(
+    username: str = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Discover whether Zia answers here, and in what shape.
+
+    The Catalyst Python SDK's Zia response shapes are undocumented, and guessing
+    SDK shapes has already cost this project three defects. So this sends one fixed
+    sentence through each of the three text-analytics calls and returns the result
+    VERBATIM - no normalising, no key picking - so the shape can be read off a real
+    response before any feature is built on it.
+
+    The sample is a synthetic complainant statement, chosen to contain the things a
+    real one would: a person, a place, a vehicle, a valuable and an amount.
+    """
+    from src.services import catalyst
+
+    sample = (
+        "On 14 August 2026 at about 9 PM, the complainant Ramesh Kumar was "
+        "returning to Jayanagar in Bengaluru when two men on a black Pulsar "
+        "motorcycle snatched his gold chain worth Rs 85,000 near the bus stand "
+        "and fled towards Wilson Garden."
+    )
+
+    def _attempt(label: str, fn) -> Dict[str, Any]:
+        raw = fn([sample])
+        return {
+            "returned": raw is not None,
+            "python_type": type(raw).__name__ if raw is not None else None,
+            "raw": raw,
+            "error": catalyst.diagnostics()["last_zia_error"] if raw is None else None,
+        }
+
+    return {
+        "why": ("Zia response shapes are undocumented. This returns them raw so a "
+                "feature can be built on the observed shape rather than a guess."),
+        "sample_document": sample,
+        "attempts": {
+            "get_NER_prediction": _attempt("ner", catalyst.zia_ner),
+            "get_keyword_extraction": _attempt("keywords", catalyst.zia_keywords),
+            "get_sentiment_analysis": _attempt("sentiment", catalyst.zia_sentiment),
+        },
+        "sdk": catalyst.diagnostics(),
+    }
+
+
 @router.get("/system/info")
 async def system_info(
     db: Session = Depends(get_db),

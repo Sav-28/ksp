@@ -27,8 +27,13 @@ async def compliance_report(
     # clock only changes when a case is registered, arrested or chargesheeted.
     data, source = cache.get_or_compute(
         "compliance:report:v1", 300, lambda: svc.compliance_report(db))
-    data["cache"] = {"source": source, "ttl_seconds": 300}
-    return data
+    # Shallow-copy before adding the cache block. On an in-process hit the object
+    # returned IS the cached object, so annotating it in place would write this
+    # request's cache metadata back into the stored entry - a response describing
+    # the wrong tier is exactly the silent substitution this project reports
+    # against. The nested analysis dicts are never mutated, so a shallow copy is
+    # enough and avoids deep-copying a ~20 KB payload per request.
+    return {**data, "cache": {"source": source, "ttl_seconds": 300}}
 
 
 @router.get("/compliance/custody-clock")

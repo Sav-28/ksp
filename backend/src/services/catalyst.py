@@ -29,6 +29,43 @@ codebase never has to guess:
     app.email()     -> Email
         .send_mail({from_email, to_email: List[str], subject, content,
                     html_mode, display_name, cc, bcc, reply_to, attachments})
+    app.zia()       -> Zia
+        .get_NER_prediction(list_of_docs: List[str])
+        .get_keyword_extraction(list_of_docs: List[str])
+        .get_sentiment_analysis(list_of_docs: List[str], keywords=None)
+        .get_text_analytics(list_of_docs: List[str], keywords=None)
+
+ZIA RESPONSE SHAPES - MEASURED, not documented
+----------------------------------------------
+Undocumented, so these were read off a real response via
+GET /api/system/zia-probe on the deployed app. Each call returns a LIST with one
+element per input document. Note that every numeric field in the NER response is a
+STRING, including the indices and the confidence score.
+
+    get_NER_prediction ->
+      [{"ner": {"general_entities": [
+          {"token": "Ramesh Kumar", "ner_tag": "Person",
+           "start_index": "49", "end_index": "61", "confidence_score": "98",
+           "fine_entities": [ {token, ner_tag, start_index, end_index}, ... ]}
+      ]}}]
+      ner_tag values observed on a complainant statement: Person, City, Date,
+      Time, Money, Number, Color. Money carries fine_entities splitting
+      Currency_rupees from Value.
+
+    get_keyword_extraction ->
+      [{"keyword_extractor": {"keywords": [str], "keyphrases": [str]}}]
+      keyphrases are the useful half: "black Pulsar motorcycle", "gold chain".
+
+    get_sentiment_analysis ->
+      [{"sentiment_prediction": [{"document_sentiment": "Negative"|"Positive"|"Neutral",
+                                  "overall_score": float,
+                                  "sentence_analytics": [{"sentence": str,
+                                                          "sentiment": str,
+                                                          "confidence_scores": {
+                                                              "negative": float,
+                                                              "neutral": float,
+                                                              "positive": float}}]}}]
+      Note the extra list nesting under sentiment_prediction.
 
 TWO CONSTRAINTS THAT SHAPE EVERY CALLER
 ---------------------------------------
@@ -69,6 +106,8 @@ _state: Dict[str, Any] = {
     "last_init_error": None,
     "init_ok_once": False,    # has initialisation EVER succeeded in this process
     "last_stratus_error": None,
+    "last_zia_error": None,
+    "zia_ok_once": False,     # has a Zia call EVER returned in this process
 }
 
 
@@ -286,6 +325,69 @@ def cache_segment():
 
 
 # ---------------------------------------------------------------------------
+# Zia (text analytics)
+# ---------------------------------------------------------------------------
+# The three calls used here all take a LIST of documents and are the only Zia
+# surface this project needs. Their RESPONSE shapes are not documented anywhere we
+# could find, so callers must treat the return as opaque JSON and the shape is
+# discovered by GET /api/system/zia-probe against the deployed app rather than
+# assumed here. Every wrapper returns None on any failure and records why.
+def _zia_call(what: str, fn) -> Optional[Any]:
+    """
+    Run one Zia call, recording the outcome. Shared so all three behave alike.
+
+    `what` names the operation for the error string; `fn` receives the Zia handle.
+    """
+    app = get_app()
+    if app is None:
+        _state["last_zia_error"] = (
+            f"{what}: Catalyst SDK not initialised "
+            f"({_state['last_init_error'] or 'no credentials in scope'})"
+        )
+        return None
+    try:
+        result = fn(app.zia())
+        _state["last_zia_error"] = None
+        _state["zia_ok_once"] = True
+        return result
+    except Exception as exc:
+        _state["last_zia_error"] = f"{what}: {type(exc).__name__}: {exc}"[:400]
+        log.debug("Zia %s failed: %s", what, exc)
+        return None
+
+
+def zia_ner(docs: List[str]) -> Optional[Any]:
+    """Named-entity prediction over one or more documents."""
+    if not docs:
+        return None
+    return _zia_call("get_NER_prediction", lambda z: z.get_NER_prediction(docs))
+
+
+def zia_keywords(docs: List[str]) -> Optional[Any]:
+    """Keyword extraction over one or more documents."""
+    if not docs:
+        return None
+    return _zia_call("get_keyword_extraction", lambda z: z.get_keyword_extraction(docs))
+
+
+def zia_sentiment(docs: List[str]) -> Optional[Any]:
+    """Sentiment analysis over one or more documents."""
+    if not docs:
+        return None
+    return _zia_call("get_sentiment_analysis", lambda z: z.get_sentiment_analysis(docs))
+
+
+def zia_used_successfully() -> bool:
+    """
+    Whether a Zia call has actually returned in this process.
+
+    The inventory reports Zia live only on this, never on configuration - Zia needs
+    no env var, so configuration could never have been evidence of anything.
+    """
+    return bool(_state.get("zia_ok_once"))
+
+
+# ---------------------------------------------------------------------------
 # Mail
 # ---------------------------------------------------------------------------
 def send_mail(subject: str, content: str, to: List[str],
@@ -333,6 +435,8 @@ def diagnostics() -> Dict[str, Any]:
         "initialised_at_least_once": _state["init_ok_once"],
         "last_init_error": _state["last_init_error"],
         "last_stratus_error": _state["last_stratus_error"],
+        "zia_succeeded_at_least_once": _state["zia_ok_once"],
+        "last_zia_error": _state["last_zia_error"],
         # Presence and age only - the header values are credentials.
         "gateway_headers_captured": captures,
         "gateway_headers_age_seconds": (
