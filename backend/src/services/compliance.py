@@ -36,7 +36,7 @@ court. Every figure is traceable to a case so an officer can verify it.
 from __future__ import annotations
 
 from typing import Dict, Any, List, Optional
-from datetime import date
+from datetime import date, timedelta
 from collections import defaultdict
 
 from sqlalchemy.orm import Session
@@ -87,6 +87,39 @@ def _status_for(days_left: int) -> str:
     if days_left <= WARNING_DAYS_LEFT:
         return "Warning"
     return "On track"
+
+
+def assess_custody(arrest_date: Optional[date], gravity: Optional[str],
+                   chargesheet_filed: bool,
+                   today: Optional[date] = None) -> Optional[Dict[str, Any]]:
+    """
+    Custody-clock position for ONE case.
+
+    Kept here rather than in the case-detail service so the 60/90-day rule lives
+    in exactly one place: a dossier and the compliance report must never disagree
+    about whether a case has breached.
+
+    Returns None when the clock does not apply - no arrest recorded, or the
+    chargesheet is already filed, in which case there is nothing left to run.
+    """
+    if arrest_date is None or chargesheet_filed:
+        return None
+    today = today or date.today()
+    heinous = (gravity or "").strip().lower() == "heinous"
+    limit = CUSTODY_LIMIT_HEINOUS if heinous else CUSTODY_LIMIT_ORDINARY
+    elapsed = (today - arrest_date).days
+    days_left = limit - elapsed
+    return {
+        "applies": True,
+        "arrest_date": arrest_date.isoformat(),
+        "days_in_custody": elapsed,
+        "statutory_limit_days": limit,
+        "days_remaining": days_left,
+        "compliance_status": _status_for(days_left),
+        "due_by": (arrest_date + timedelta(days=limit)).isoformat(),
+        "legal_basis": LEGAL_BASIS,
+        "disclaimer": DISCLAIMER,
+    }
 
 
 def custody_clock(db: Session, today: Optional[date] = None) -> Dict[str, Any]:
