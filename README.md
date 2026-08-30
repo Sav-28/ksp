@@ -17,10 +17,6 @@ forecasting.
 
 ---
 
-## Live deployment
-
-**https://ksp-api-50044161264.development.catalystappsail.in**
-
 | Sign in as | Password | Use it for |
 |---|---|---|
 | `investigator` | `invest@2024` | registering FIRs, statement analysis, case work |
